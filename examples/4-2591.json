@@ -1,0 +1,200 @@
+{
+  "schema_version": "1.0",
+  "batch_id": null,
+  "files": [
+    {
+      "file_id": "fixture-4-2591",
+      "file_name": "4-2591.pdf",
+      "file_url": "https://documents.example.invalid/api/v1/jobs/{job_id}/source-files/fixture-4-2591",
+      "mime_type": "application/pdf",
+      "documents": [
+        {
+          "document_id": "doc-001",
+          "segment_index": 1,
+          "pages": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          "split_confidence": null,
+          "classification": {
+            "document_root": "Входящая/Исходящая корреспонденция",
+            "direction": null,
+            "is_letter": true,
+            "template_path": [],
+            "document_kind": "Претензия",
+            "document_subkind": null,
+            "confidence": null,
+            "alternatives": []
+          },
+          "requisites": {
+            "title": "Претензия",
+            "subject": "Требование об уплате неустойки за просрочку поставки товара по контракту № 07-13052026-2",
+            "document_number": null,
+            "document_date": "2026-09-02",
+            "document_date_raw": "«02» 09 2026",
+            "sender": {
+              "name": "Филиал ФГБУ «ЦЖКУ» Минобороны России по РВСН",
+              "inn": "7729314745",
+              "kpp": "770101001",
+              "ogrn": null,
+              "address": "143010, Московская обл., п. Власиха, ул. Маршала Жукова, д. 2",
+              "email": "zhky_rvsn@mil.ru",
+              "phone": null
+            },
+            "recipient": {
+              "name": "ИП Петрова Алина Владимировна",
+              "inn": null,
+              "kpp": null,
+              "ogrn": null,
+              "address": "625023, Тюменская обл., г. Тюмень, ул. Пржевальского, д. 54",
+              "email": "ipp.petrova@gmail.com",
+              "phone": null
+            },
+            "signatories": [
+              {
+                "role": "sender_signatory",
+                "name": "В. Крыканов",
+                "position": "Начальник"
+              },
+              {
+                "role": "executor",
+                "name": "Редичкина А.М.",
+                "position": "Исполнитель"
+              }
+            ],
+            "related_entities": {
+              "contracts": [
+                {
+                  "number": "07-13052026-2",
+                  "date": "2026-05-13",
+                  "type": "Контракт"
+                }
+              ],
+              "specifications": [],
+              "invoices": [],
+              "acts": [
+                {
+                  "number": "171",
+                  "date": "2026-07-18",
+                  "type": "Акт приема-передачи товара, приложение на стр. 3"
+                },
+                {
+                  "number": "114",
+                  "date": "2026-05-28",
+                  "type": "Акт приема-передачи товара, приложение на стр. 4"
+                },
+                {
+                  "number": "180",
+                  "date": "2026-07-10",
+                  "type": "Акт приема-передачи товара, приложение на стр. 5"
+                }
+              ],
+              "letters": [],
+              "orders": [],
+              "court_cases": []
+            },
+            "amounts": [
+              {
+                "type": "contract_total",
+                "value": 6042308.48,
+                "currency": "RUB"
+              },
+              {
+                "type": "vat",
+                "value": 287728.98,
+                "currency": "RUB"
+              },
+              {
+                "type": "penalty",
+                "value": 3309.81,
+                "currency": "RUB"
+              }
+            ],
+            "response_required": null,
+            "response_due_date": null,
+            "delivery_channel": "unknown",
+            "attachments": [
+              {
+                "title": "Копия акта приема-передачи товара № 171 (дата на акте 18.07.2026)",
+                "page_range": [
+                  3,
+                  3
+                ],
+                "document_kind": "Акт приема-передачи товара",
+                "document_root": "Документы связанные с исполнением договоров"
+              },
+              {
+                "title": "Копия акта приема-передачи товара № 114 (дата на акте 28.05.2026)",
+                "page_range": [
+                  4,
+                  4
+                ],
+                "document_kind": "Акт приема-передачи товара",
+                "document_root": "Документы связанные с исполнением договоров"
+              },
+              {
+                "title": "Копия акта приема-передачи товара № 180 (дата на акте 10.07.2026)",
+                "page_range": [
+                  5,
+                  5
+                ],
+                "document_kind": "Акт приема-передачи товара",
+                "document_root": "Документы связанные с исполнением договоров"
+              },
+              {
+                "title": "Расчёт неустойки (пени) на 27.08.2026",
+                "page_range": [
+                  6,
+                  6
+                ],
+                "document_kind": "Расчёт неустойки",
+                "document_root": "Документы связанные с исполнением договоров"
+              }
+            ],
+            "items": [],
+            "summary": "Претензия по контракту № 07-13052026-2 на уплату неустойки 3 309,81 руб. Оплата запрошена в течение семи банковских дней с момента получения. Страницы 3–6 — приложения к претензии."
+          },
+          "one_c": {
+            "view_of_document": null,
+            "folder": null,
+            "template_leaf": null,
+            "counterparty": null,
+            "organization": null,
+            "addressee": null,
+            "received_via": null,
+            "answer_required": null,
+            "form": null,
+            "project": null,
+            "comment": null
+          },
+          "attachment_file": {
+            "file_name": "doc-001.pdf",
+            "file_url": "https://documents.example.invalid/api/v1/jobs/{job_id}/documents/doc-001/file?token={signed_token}",
+            "mime_type": "application/pdf"
+          },
+          "recognition": {
+            "ocr_engine": null,
+            "languages": [
+              "ru",
+              "en"
+            ],
+            "low_confidence_fields": [
+              "requisites.document_number",
+              "classification.direction"
+            ]
+          },
+          "warnings": [
+            "Рукописный номер претензии на странице 1 требует ручной проверки: он не внесён в document_number.",
+            "Организация, от имени которой выполняется регистрация в 1С, не передана: направление и точный путь шаблона письма не определены.",
+            "В списке приложений претензии указаны даты актов 06.07, 07.07 и 13.07.2026, но на приложенных актах №171, №114 и №180 стоят соответственно 18.07, 28.05 и 10.07.2026.",
+            "Установлен срок оплаты 7 банковских дней с момента получения; дата фактического получения неизвестна, response_due_date не вычисляется."
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,113 @@
+{
+  "schema_version": "1.0",
+  "batch_id": null,
+  "files": [
+    {
+      "file_id": "file_00000000bd5c81f4ad4e168b4aa7c6b9",
+      "file_name": "ГП Взлет Портленд этап 2.pdf",
+      "file_url": "storage://documents/ГП Взлет Портленд этап 2.pdf",
+      "mime_type": "application/pdf",
+      "documents": [
+        {
+          "document_id": "gp-portland-stage-2",
+          "segment_index": 1,
+          "pages": [1],
+          "split_confidence": 0.99,
+          "classification": {
+            "document_root": "Входящая/Исходящая корреспонденция",
+            "direction": "incoming",
+            "is_letter": true,
+            "template_path": [
+              "Входящая/Исходящая корреспонденция",
+              "Входящее письмо",
+              "Переписка с контрагентом"
+            ],
+            "document_kind": "Гарантийное письмо",
+            "document_subkind": null,
+            "confidence": 0.89,
+            "alternatives": []
+          },
+          "requisites": {
+            "title": "Гарантийное письмо",
+            "subject": "Просьба начать изготовление оборудования по счету № 7738 от 22.10.2026",
+            "document_number": null,
+            "document_date": "2026-10-22",
+            "document_date_raw": "от 22.10.2026г.",
+            "sender": {
+              "name": "ООО «ИНЖТЕПЛОПРОЕКТ»",
+              "inn": null,
+              "kpp": null,
+              "ogrn": null,
+              "address": "Россия, 142700, Московская область, Ленинский район, город Видное, Белокаменное ш., д. 9, этаж 1, ком. № 60",
+              "email": null,
+              "phone": null
+            },
+            "recipient": {
+              "name": "ООО «Взлет-МСК»",
+              "inn": null,
+              "kpp": null,
+              "ogrn": null,
+              "address": null,
+              "email": null,
+              "phone": null
+            },
+            "signatories": [
+              {
+                "role": "sender_signatory",
+                "name": "Потапова И.Е.",
+                "position": "Генеральный директор"
+              }
+            ],
+            "related_entities": {
+              "contracts": [],
+              "specifications": [],
+              "invoices": [
+                {
+                  "number": "7738",
+                  "date": "2026-10-22"
+                }
+              ],
+              "acts": [],
+              "letters": [],
+              "orders": [],
+              "court_cases": []
+            },
+            "amounts": [],
+            "response_required": false,
+            "response_due_date": null,
+            "delivery_channel": "paper",
+            "attachments": [],
+            "items": [],
+            "summary": "Гарантийное письмо с просьбой начать изготовление оборудования; отправитель гарантирует оплату."
+          },
+          "one_c": {
+            "view_of_document": "Входящее письмо",
+            "folder": "Входящие письма",
+            "template_leaf": "Переписка с контрагентом",
+            "counterparty": "ООО «ИНЖТЕПЛОПРОЕКТ»",
+            "organization": "ООО «Взлет-МСК»",
+            "addressee": null,
+            "received_via": null,
+            "answer_required": false,
+            "form": "Бумажная",
+            "project": null,
+            "comment": null
+          },
+          "attachment_file": {
+            "file_name": "ГП Взлет Портленд этап 2.pdf",
+            "file_url": "storage://documents/ГП Взлет Портленд этап 2.pdf",
+            "mime_type": "application/pdf"
+          },
+          "recognition": {
+            "ocr_engine": "docling",
+            "languages": ["ru", "en"],
+            "low_confidence_fields": ["document_number"]
+          },
+          "warnings": [
+            "Явный исходящий номер письма не распознан."
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,129 @@
+{
+  "schema_version": "1.0",
+  "batch_id": null,
+  "files": [
+    {
+      "file_id": "file_0000000004e082108310c14cc035673a",
+      "file_name": "Спецификация №3.pdf",
+      "file_url": "storage://documents/Спецификация №3.pdf",
+      "mime_type": "application/pdf",
+      "documents": [
+        {
+          "document_id": "spec-03",
+          "segment_index": 1,
+          "pages": [1],
+          "split_confidence": 0.99,
+          "classification": {
+            "document_root": "Составляющие документы договора",
+            "direction": null,
+            "is_letter": false,
+            "template_path": [],
+            "document_kind": "Спецификация",
+            "document_subkind": null,
+            "confidence": 0.98,
+            "alternatives": [
+              {
+                "template_path": [],
+                "confidence": 0.64
+              }
+            ]
+          },
+          "requisites": {
+            "title": "Спецификация № 03 к договору поставки продукции № ВМСК-88-0925",
+            "subject": "Поставка продукции по спецификации",
+            "document_number": "03",
+            "document_date": "2026-03-11",
+            "document_date_raw": "«11» марта 2026 года",
+            "sender": {
+              "name": "Общество с ограниченной ответственностью «Взлет-МСК»",
+              "inn": null,
+              "kpp": null,
+              "ogrn": null,
+              "address": null,
+              "email": null,
+              "phone": null
+            },
+            "recipient": {
+              "name": "Общество с ограниченной ответственностью «Группа ПОЛИПЛАСТИК»",
+              "inn": null,
+              "kpp": null,
+              "ogrn": null,
+              "address": null,
+              "email": null,
+              "phone": null
+            },
+            "signatories": [],
+            "related_entities": {
+              "contracts": [
+                {
+                  "number": "ВМСК-88-0925",
+                  "date": "2025-09-09",
+                  "type": "Договор поставки продукции"
+                }
+              ],
+              "specifications": [],
+              "invoices": [],
+              "acts": [],
+              "letters": [],
+              "orders": [],
+              "court_cases": []
+            },
+            "amounts": [
+              {
+                "type": "total",
+                "value": 1190781.00,
+                "currency": "RUB"
+              },
+              {
+                "type": "vat",
+                "value": 214731.00,
+                "currency": "RUB"
+              }
+            ],
+            "response_required": null,
+            "response_due_date": null,
+            "delivery_channel": "paper",
+            "attachments": [],
+            "items": [
+              {
+                "line_no": 1,
+                "name": "Расходомер-счетчик ультразвуковой ВЗЛЕТ РСЛ-222 в комплекте",
+                "description": "Акустическая система АС-111-013 без звуковода; источник вторичного питания HDR-30-24; кабель связи АС-БИЦ; удлинение комплекта; установочный патрубок",
+                "unit": "шт",
+                "quantity": 3.0,
+                "price": 396927.00,
+                "amount": 1190781.00,
+                "delivery_term": "До 12 недель с даты оплаты аванса"
+              }
+            ],
+            "summary": "Спецификация на поставку расходомеров-счетчиков ультразвуковых ВЗЛЕТ РСЛ-222."
+          },
+          "one_c": {
+            "view_of_document": null,
+            "folder": null,
+            "template_leaf": null,
+            "counterparty": "ООО «Группа ПОЛИПЛАСТИК»",
+            "organization": "ООО «Взлет-МСК»",
+            "addressee": null,
+            "received_via": null,
+            "answer_required": null,
+            "form": "Бумажная",
+            "project": null,
+            "comment": null
+          },
+          "attachment_file": {
+            "file_name": "Спецификация №3.pdf",
+            "file_url": "storage://documents/Спецификация №3.pdf",
+            "mime_type": "application/pdf"
+          },
+          "recognition": {
+            "ocr_engine": "docling",
+            "languages": ["ru", "en"],
+            "low_confidence_fields": []
+          },
+          "warnings": []
+        }
+      ]
+    }
+  ]
+}

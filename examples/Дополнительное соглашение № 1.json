@@ -1,0 +1,113 @@
+{
+  "schema_version": "1.0",
+  "batch_id": null,
+  "files": [
+    {
+      "file_id": "file_00000000a2088210b0af82b9a4e85b4f",
+      "file_name": "Дополнительное соглашение № 1.pdf",
+      "file_url": "storage://documents/Дополнительное соглашение № 1.pdf",
+      "mime_type": "application/pdf",
+      "documents": [
+        {
+          "document_id": "supp-agreement-1",
+          "segment_index": 1,
+          "pages": [1],
+          "split_confidence": 0.99,
+          "classification": {
+            "document_root": "Договоры",
+            "direction": null,
+            "is_letter": false,
+            "template_path": [],
+            "document_kind": "Дополнительное соглашение",
+            "document_subkind": null,
+            "confidence": 0.98,
+            "alternatives": []
+          },
+          "requisites": {
+            "title": "Дополнительное соглашение № 1 к Договору подряда № ВМСК-СО-19/25",
+            "subject": "Изменение условий договора подряда",
+            "document_number": "1",
+            "document_date": "2026-02-26",
+            "document_date_raw": "«26» февраля 2026",
+            "sender": {
+              "name": "Акционерное общество строительная компания «Горизонт»",
+              "inn": null,
+              "kpp": null,
+              "ogrn": null,
+              "address": null,
+              "email": null,
+              "phone": null
+            },
+            "recipient": {
+              "name": "Общество с ограниченной ответственностью «Взлет-МСК»",
+              "inn": null,
+              "kpp": null,
+              "ogrn": null,
+              "address": "141432, Московская область, городской округ Химки, город Химки, квартал Яковлево, строение 10Н, корпус 1",
+              "email": null,
+              "phone": null
+            },
+            "signatories": [
+              {
+                "role": "sender_signatory",
+                "name": "Змеева Екатерина Сергеевна",
+                "position": "Генеральный директор"
+              },
+              {
+                "role": "recipient_signatory",
+                "name": "Черепанов Максим Валерьевич",
+                "position": "Генеральный директор"
+              }
+            ],
+            "related_entities": {
+              "contracts": [
+                {
+                  "number": "ВМСК-СО-19/25",
+                  "date": "2025-10-31",
+                  "type": "Договор подряда"
+                }
+              ],
+              "specifications": [],
+              "invoices": [],
+              "acts": [],
+              "letters": [],
+              "orders": [],
+              "court_cases": []
+            },
+            "amounts": [],
+            "response_required": null,
+            "response_due_date": null,
+            "delivery_channel": "paper",
+            "attachments": [],
+            "items": [],
+            "summary": "Дополнительное соглашение к договору подряда: изменение порядка применения НДС, срока действия договора и адреса Подрядчика."
+          },
+          "one_c": {
+            "view_of_document": null,
+            "folder": null,
+            "template_leaf": null,
+            "counterparty": "АО СК «Горизонт»",
+            "organization": "ООО «Взлет-МСК»",
+            "addressee": null,
+            "received_via": null,
+            "answer_required": null,
+            "form": "Бумажная",
+            "project": null,
+            "comment": null
+          },
+          "attachment_file": {
+            "file_name": "Дополнительное соглашение № 1.pdf",
+            "file_url": "storage://documents/Дополнительное соглашение № 1.pdf",
+            "mime_type": "application/pdf"
+          },
+          "recognition": {
+            "ocr_engine": "docling",
+            "languages": ["ru", "en"],
+            "low_confidence_fields": []
+          },
+          "warnings": []
+        }
+      ]
+    }
+  ]
+}

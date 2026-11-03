@@ -1,0 +1,140 @@
+{
+  "schema_version": "1.0",
+  "batch_id": null,
+  "files": [
+    {
+      "file_id": "file_0000000045808210b0d097ba5c387362",
+      "file_name": "Исх №А-880-26 от 29.10.2026.pdf",
+      "file_url": "storage://documents/Исх №А-880-26 от 29.10.2026.pdf",
+      "mime_type": "application/pdf",
+      "documents": [
+        {
+          "document_id": "a-880-26",
+          "segment_index": 1,
+          "pages": [1],
+          "split_confidence": 0.99,
+          "classification": {
+            "document_root": "Входящая/Исходящая корреспонденция",
+            "direction": "incoming",
+            "is_letter": true,
+            "template_path": [
+              "Входящая/Исходящая корреспонденция",
+              "Входящее письмо",
+              "Переписка с контрагентом"
+            ],
+            "document_kind": "Сопроводительное письмо",
+            "document_subkind": null,
+            "confidence": 0.86,
+            "alternatives": [
+              {
+                "template_path": [
+                  "Входящая/Исходящая корреспонденция",
+                  "Входящее письмо",
+                  "Информационное письмо от поставщика"
+                ],
+                "confidence": 0.74
+              }
+            ]
+          },
+          "requisites": {
+            "title": "О проведении ШМР",
+            "subject": "Направление проекта дополнительного соглашения о порядке проведения шеф-монтажных и пуско-наладочных работ",
+            "document_number": "А-880/26",
+            "document_date": "2026-10-29",
+            "document_date_raw": "Исх. № А-880/26 от 29.10.2026",
+            "sender": {
+              "name": "АО «АЯКС ИНЖИНИРИНГ»",
+              "inn": "9715447869",
+              "kpp": null,
+              "ogrn": "1237700281730",
+              "address": "105064, г. Москва, Нижний Сусальный переулок, 1.5, стр.19",
+              "email": null,
+              "phone": "8-495-532-08-83"
+            },
+            "recipient": {
+              "name": "ООО «ВЗЛЕТ-МСК»",
+              "inn": null,
+              "kpp": null,
+              "ogrn": null,
+              "address": null,
+              "email": "mail@vzljot.moscow",
+              "phone": null
+            },
+            "signatories": [
+              {
+                "role": "sender_signatory",
+                "name": "Н.Н. Муравецкий",
+                "position": "Заместитель генерального директора по проектированию"
+              },
+              {
+                "role": "executor",
+                "name": "Бондарева О.В.",
+                "position": "Исполнитель"
+              }
+            ],
+            "related_entities": {
+              "contracts": [
+                {
+                  "number": "ВМСК-Пос-БМИ-4/26",
+                  "date": "2026-05-06",
+                  "type": "Договор поставки"
+                }
+              ],
+              "specifications": [
+                {
+                  "number": "1",
+                  "date": "2026-05-06"
+                }
+              ],
+              "invoices": [],
+              "acts": [],
+              "letters": [],
+              "orders": [],
+              "court_cases": []
+            },
+            "amounts": [],
+            "response_required": true,
+            "response_due_date": null,
+            "delivery_channel": "paper",
+            "attachments": [
+              {
+                "title": "Дополнительное соглашение № 1 к Договору поставки № ВМСК-Пос-БМИ-4/26 от 06.05.2026",
+                "page_range": [],
+                "document_kind": "Дополнительное соглашение",
+                "document_root": "Договоры"
+              }
+            ],
+            "items": [],
+            "summary": "Контрагент направляет проект дополнительного соглашения и просит согласовать и подписать экземпляр."
+          },
+          "one_c": {
+            "view_of_document": "Входящее письмо",
+            "folder": "Входящие письма",
+            "template_leaf": "Переписка с контрагентом",
+            "counterparty": "АО «АЯКС ИНЖИНИРИНГ»",
+            "organization": "ООО «Взлет-МСК»",
+            "addressee": "Черепанов Максим Валерьевич",
+            "received_via": null,
+            "answer_required": true,
+            "form": "Бумажная",
+            "project": "Строительство ABK/CBK тит.8315",
+            "comment": null
+          },
+          "attachment_file": {
+            "file_name": "Исх №А-880-26 от 29.10.2026.pdf",
+            "file_url": "storage://documents/Исх №А-880-26 от 29.10.2026.pdf",
+            "mime_type": "application/pdf"
+          },
+          "recognition": {
+            "ocr_engine": "docling",
+            "languages": ["ru", "en"],
+            "low_confidence_fields": []
+          },
+          "warnings": [
+            "Вид письма может быть также интерпретирован как «Информационное письмо от поставщика»."
+          ]
+        }
+      ]
+    }
+  ]
+}
