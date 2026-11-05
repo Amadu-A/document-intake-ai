@@ -47,5 +47,7 @@
   Самостоятельный `git rm --cached` не выполнялся; чистый clone пока содержит эти файлы.
 
 Для live-сравнения сохраняются expected/actual, field_path, source_page, match/mismatch
-и total_seconds в приватный `reports/local/live-comparison.json`. Сравнение модели
-здесь пока **NOT_RUN**: нет доступа к реальному shared runtime и его Docling key.
+и total_seconds в приватный `reports/local/live-comparison.json`.
+Реальный прогон от 05.11.2026 и оставшиеся расхождения описаны в
+[отчёте SSH-проверки](ssh-validation-2026-11-05.md); подробная частная матрица —
+`reports/local/compact-comparison.md`. Источники и критерии не изменялись под ответ VLM.

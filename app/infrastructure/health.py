@@ -11,6 +11,28 @@ import pymupdf
 from app.domain.errors import IntakeError
 
 
+def raster_probe(directory: Path) -> list[dict]:
+    """Создаёт PDF только с растровым маркером: PASS требует настоящего OCR, а не text parser."""
+    pdf_path, preview = directory / "probe.pdf", directory / "probe.png"
+    with pymupdf.open() as source:
+        page = source.new_page(width=400, height=200)
+        page.insert_text((30, 80), "INTAKE 7429", fontsize=24)
+        image = page.get_pixmap(matrix=pymupdf.Matrix(2, 2)).tobytes("png")
+    preview.write_bytes(image)
+    with pymupdf.open() as raster:
+        page = raster.new_page(width=400, height=200)
+        page.insert_image(page.rect, stream=image)
+        raster.save(pdf_path)
+    return [
+        {
+            "file_id": "synthetic-health",
+            "page_number": 1,
+            "preview": str(preview),
+            "pdf": str(pdf_path),
+        }
+    ]
+
+
 class Health:
     """Не объявляет READY при недоступном OCR, VLM JSON/vision, PostgreSQL или consumer."""
 
@@ -49,29 +71,14 @@ class Health:
         }
 
     async def _contracts(self) -> dict:
-        """Использует собственный несекретный PDF, проверяя реальный текст OCR и vision-ответ."""
+        """Проверяет OCR растрового PDF и vision-маркер без встроенного текстового слоя."""
         checks = {}
 
         async def discard(_kind: str, _data: dict) -> None:
             """Не пишет synthetic inference в пользовательские SSE и обычные логи."""
 
         with tempfile.TemporaryDirectory(dir=self.settings.data_dir) as temporary:
-            directory = Path(temporary)
-            pdf_path, preview = directory / "probe.pdf", directory / "probe.png"
-            document = pymupdf.open()
-            page = document.new_page(width=400, height=200)
-            page.insert_text((30, 80), "INTAKE 7429", fontsize=24)
-            page.get_pixmap().save(preview)
-            document.save(pdf_path)
-            document.close()
-            pages = [
-                {
-                    "file_id": "synthetic-health",
-                    "page_number": 1,
-                    "preview": str(preview),
-                    "pdf": str(pdf_path),
-                }
-            ]
+            pages = await asyncio.to_thread(raster_probe, Path(temporary))
             try:
                 result = await self.vision.request(
                     'Прочитай изображение и верни JSON {"text": "прочитанный текст"}.',

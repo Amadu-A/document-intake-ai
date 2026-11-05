@@ -116,6 +116,58 @@ def test_catalog_rejects_invented_leaf():
         )
 
 
+def test_unknown_direction_accepts_only_closed_partial_classification():
+    """Неизвестное направление сохраняет null и пустой путь, разрешая виды/пары из каталога."""
+    for path in LETTER_PATHS:
+        for subkind in (None, path[3] if len(path) == 4 else None):
+            classification = Classification(
+                document_root=path[0],
+                direction=None,
+                is_letter=True,
+                template_path=[],
+                document_kind=path[2],
+                document_subkind=subkind,
+            )
+            assert classification.direction is None and classification.template_path == []
+            assert classification.document_kind == path[2]
+    classification = Classification.model_validate(facts()["classification"])
+    assert classification.document_kind is None and classification.document_subkind is None
+
+
+@pytest.mark.parametrize(
+    ("kind", "subkind"),
+    [
+        ("Новый вид", None),
+        ("Претензия", None),
+        ("", None),
+        (None, "Новый подвид"),
+        (None, "Исходящее письмо Взлет-МСК"),
+        ("Переписка с контрагентом", "Новый подвид"),
+        ("Переписка с судами", "Исходящее письмо Взлет-МСК"),
+        ("Исходящее письмо Взлет-МСК", None),
+    ],
+)
+def test_unknown_direction_rejects_invented_names_and_unlinked_subkind(kind, subkind):
+    """Пустой template_path не обходится сокращённым видом, чужим подвидом или смешением уровней."""
+    value = facts()["classification"]
+    value.update(document_kind=kind, document_subkind=subkind)
+    with pytest.raises(ValidationError):
+        Classification.model_validate(value)
+
+
+def test_nonletter_still_accepts_preliminary_kind_outside_letter_catalog():
+    """Каталог писем не ограничивает предварительные виды/подвиды договорных документов."""
+    classification = Classification(
+        document_root="Договоры",
+        direction=None,
+        is_letter=False,
+        template_path=[],
+        document_kind="Дополнительное соглашение",
+        document_subkind="Предварительный подвид договора",
+    )
+    assert classification.document_kind == "Дополнительное соглашение"
+
+
 def test_money_is_json_number_without_decimal_calculation_error():
     """Decimal используется до сериализации, исходный контракт требует числовое JSON-значение."""
     amount = Amount(type="penalty", value=Decimal("3309.81"), currency="RUB")
@@ -146,5 +198,9 @@ def test_user_fixtures_keep_backward_compatible_shape():
                 classification = document["classification"]
                 if classification["template_path"]:
                     classification["document_kind"] = classification["template_path"][2]
+                elif classification["is_letter"] and classification["direction"] is None:
+                    # Legacy описательный вид не входит в каталог; здесь проверяется только форма.
+                    classification["document_kind"] = None
+                    classification["document_subkind"] = None
         parsed = BatchResult.model_validate(adapted)
         assert set(parsed.model_dump()) == {"schema_version", "batch_id", "files"}

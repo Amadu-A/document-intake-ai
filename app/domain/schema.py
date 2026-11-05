@@ -58,12 +58,20 @@ class Classification(StrictModel):
 
     @model_validator(mode="after")
     def closed_taxonomy(self) -> "Classification":
-        """Отвергает выдуманные листы и направление у неписем."""
+        """Закрывает виды писем при любом направлении; неписьма сохраняют предварительный вид."""
         if self.is_letter != (self.document_root == DocumentRoot.LETTER):
             raise ValueError("Род и is_letter противоречат друг другу")
         if not self.is_letter or self.direction is None:
             if self.template_path or (not self.is_letter and self.direction is not None):
                 raise ValueError("Без направления письма template_path должен быть пуст")
+            if self.is_letter:
+                allowed = [path for path in LETTER_PATHS if path[2] == self.document_kind]
+                if self.document_kind is not None and not allowed:
+                    raise ValueError("Вид письма отсутствует в закрытом каталоге")
+                if self.document_subkind is not None and not any(
+                    len(path) == 4 and path[3] == self.document_subkind for path in allowed
+                ):
+                    raise ValueError("Подвид письма должен принадлежать указанному виду каталога")
         else:
             expected = "Входящее письмо" if self.direction == "incoming" else "Исходящее письмо"
             path = tuple(self.template_path)

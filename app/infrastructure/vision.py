@@ -90,6 +90,7 @@ class SharedVision:
                 },
             },
             "temperature": 0,
+            "chat_template_kwargs": {"enable_thinking": self.settings.vlm_enable_thinking},
             "max_tokens": self.settings.vlm_max_tokens,
             "stream": True,
         }

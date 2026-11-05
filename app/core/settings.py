@@ -3,6 +3,7 @@
 
 import re
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, model_validator
@@ -49,11 +50,16 @@ class Settings(BaseSettings):
     download_secret: SecretStr = SecretStr("")
     docling_base_url: str = "http://docling-eval:5001"
     docling_api_key: SecretStr = SecretStr("")
+    docling_ocr_preset: str = Field("tesseract", pattern=r"^[A-Za-z][A-Za-z0-9_.-]{0,127}$")
+    docling_ocr_languages: tuple[
+        Annotated[str, Field(pattern=r"^[A-Za-z][A-Za-z0-9:_-]{0,31}$")], ...
+    ] = Field(("iso:ru", "iso:en"), min_length=1, max_length=8)
     docling_timeout_seconds: int = Field(180, ge=1, le=600)
     docling_window_pages: int = Field(20, ge=1, le=50)
     docling_max_request_mb: int = Field(45, ge=1, le=50)
     shared_vlm_base_url: str = "http://shared-vlm:8000/v1"
     shared_vlm_model: str = "shared-vlm"
+    vlm_enable_thinking: bool = False
     vlm_timeout_seconds: int = Field(180, ge=1, le=600)
     vlm_window_pages: int = Field(8, ge=2, le=32)
     vlm_overlap_pages: int = Field(2, ge=1)

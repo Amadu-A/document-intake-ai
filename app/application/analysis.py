@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from app.application.inference_schema import extraction_schema
 from app.application.ports import OCR, AnalysisSettings, Emit, JobRepository, Storage, Vision
 from app.core.observability import timed
 from app.domain.errors import IntakeError, LeaseLost
@@ -92,9 +93,17 @@ class Analyze:
         self.ocr, self.settings = ocr, settings
 
     async def _validated(
-        self, prompt: str, context: dict, pages: list[dict], model, validate, emit: Emit
+        self,
+        prompt: str,
+        context: dict,
+        pages: list[dict],
+        model,
+        validate,
+        emit: Emit,
+        *,
+        schema: dict | None = None,
     ):
-        """Ограниченно повторяет модельный запрос с формализованной обратной связью."""
+        """Повторяет запрос с обратной связью; уточнённая схема не заменяет серверную проверку."""
         feedback = []
         last_code = "schema_validation_failed"
         for attempt in range(1, self.settings.model_attempts + 1):
@@ -103,7 +112,7 @@ class Analyze:
                     prompt,
                     {**context, "validation_errors": feedback},
                     pages,
-                    model.model_json_schema(),
+                    model.model_json_schema() if schema is None else schema,
                     emit,
                 )
                 parsed = model.model_validate(raw)
@@ -169,6 +178,7 @@ class Analyze:
 
     async def _extract(self, job: Job, group: Segment, pages: list[dict], emit: Emit) -> Extracted:
         """Извлекает факты всей группы; большие комплекты согласует повторным VLM-проходом."""
+        schema = extraction_schema(job.organization_hint)
         context = {
             "organization_hint": job.organization_hint,
             "catalog": json.loads(taxonomy_json()),
@@ -177,7 +187,13 @@ class Analyze:
             "Вид/подвид при известном направлении равны узлам template_path. "
             "Без контекста организации direction=null, template_path=[], warning. "
             "Неписьма имеют предварительный вид и warning. Неизвестный способ получения "
-            "и форма хранения — null. Не вычисляй внутренние номера/статусы 1С.",
+            "и форма хранения — null. Не вычисляй внутренние номера/статусы 1С. "
+            "Неизвестное направление не меняет род письма: оно остаётся перепиской. "
+            "Определи сам документ, а не род упомянутого в нём договора или приложения. "
+            "Номер и дата документа относятся к основной части group.main_pages; "
+            "номера/даты связанных документов сохраняются в related_entities/attachments. "
+            "При расхождении OCR с изображением проверяй оригинальное изображение. "
+            "Нечитаемое значение оставь null с предупреждением.",
         }
         chunks = windows(pages, self.settings.vlm_window_pages, self.settings.vlm_overlap_pages)
         if len(chunks) == 1:
@@ -188,6 +204,7 @@ class Analyze:
                 Extracted,
                 lambda p: validate_extraction(p, group, job.organization_hint),
                 emit,
+                schema=schema,
             )
         evidence = []
         for chunk in chunks:
@@ -203,6 +220,7 @@ class Analyze:
                 Extracted,
                 lambda _: None,
                 emit,
+                schema=schema,
             )
             evidence.append(
                 {
@@ -224,6 +242,7 @@ class Analyze:
             Extracted,
             lambda p: validate_extraction(p, group, job.organization_hint),
             emit,
+            schema=schema,
         )
 
     @timed("analyze_documents")
