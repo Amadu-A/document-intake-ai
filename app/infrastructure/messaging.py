@@ -24,7 +24,6 @@ class Rabbit:
             virtualhost=self.settings.rabbitmq_vhost,
             timeout=self.settings.rabbitmq_timeout_seconds,
             reconnect_interval=5,
-            fail_fast=True,
         )
         self.channel = await self.connection.channel(publisher_confirms=True, on_return_raises=True)
         await self.channel.set_qos(prefetch_count=self.settings.worker_concurrency)
