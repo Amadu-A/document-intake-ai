@@ -1,0 +1,17 @@
+<!-- app/web/static/favicon.svg -->
+<!-- Значок документа в палитре интерфейса; SVG не содержит внешних ресурсов. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Document Intake AI — распознавание документов</title>
+  <defs>
+    <linearGradient id="brand" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#3274ff"/>
+      <stop offset="1" stop-color="#16bcc1"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="15" fill="url(#brand)"/>
+  <path d="M18 11h17l12 12v30H18z" fill="#fff"/>
+  <path d="M35 11v12h12" fill="#c6e6ff"/>
+  <path d="M25 31h15M25 38h10" fill="none" stroke="#2d6bf4" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="47" cy="48" r="12" fill="#009f84"/>
+  <path d="m41 48 4 4 8-9" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
