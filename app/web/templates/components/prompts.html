@@ -1,0 +1,17 @@
+<!-- app/web/templates/components/prompts.html -->
+<!-- Native dialog обеспечивает focus trap и Escape; сохраняются оба текста текущей сессии. -->
+<dialog class="modal" data-prompts-dialog aria-labelledby="prompts-title">
+  <div class="modal__heading"><div><span class="modal__eyebrow">НАСТРОЙКИ АНАЛИЗА · ТЕКУЩАЯ СЕССИЯ</span><h2 class="modal__title" id="prompts-title">Промпты VLM</h2></div><button class="button button--compact" type="button" data-prompts-close aria-label="Закрыть промпты">×</button></div>
+  <p class="modal__description">Два независимых этапа обработки. Для каждого задания сохраняется неизменяемый снимок обоих промптов.</p>
+  <div class="tabs" role="tablist" aria-label="Промпты VLM">
+    <button class="tabs__tab" id="prompt-tab-segmentation" role="tab" aria-selected="true" aria-controls="prompt-editor" data-prompt-tab="segmentation">01 Разделение документов</button>
+    <button class="tabs__tab" id="prompt-tab-extraction" role="tab" aria-selected="false" aria-controls="prompt-editor" data-prompt-tab="extraction" tabindex="-1">02 Классификация и реквизиты</button>
+  </div>
+  <section class="modal__editor" id="prompt-editor" role="tabpanel" aria-labelledby="prompt-tab-segmentation">
+    <div class="modal__editor-heading"><label for="prompt-text" data-prompt-label>Промпт 1 · анализ структуры пакета</label><span class="badge" data-prompt-version></span></div>
+    <textarea class="modal__textarea" id="prompt-text" data-prompt-text spellcheck="false"></textarea>
+    <div class="modal__meta"><span>JSON-схема и проверка целостности остаются серверными</span><span data-prompt-length></span></div>
+  </section>
+  <p class="modal__status" data-prompt-status aria-live="polite">Изменений нет</p>
+  <footer class="modal__footer"><button class="button" type="button" data-prompts-restore>↶ Восстановить базовый</button><span class="modal__spacer"></span><button class="button" type="button" data-prompts-close>Закрыть</button><button class="button button--primary" type="button" data-prompts-save>✓ Сохранить оба для сессии</button></footer>
+</dialog>

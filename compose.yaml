@@ -1,0 +1,126 @@
+# compose.yaml
+# Только собственные API/worker/PostgreSQL. Shared сервисы используют существующую ai-shared.
+name: ${COMPOSE_PROJECT_NAME}
+x-app: &app
+  image: document-intake-ai:local
+  build: .
+  user: "10001:10001"
+  read_only: true
+  init: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: ["/tmp:size=512m,mode=1777"]
+  volumes: ["artifacts:${DATA_DIR}"]
+  networks: [private, ai-shared]
+  restart: unless-stopped
+  pids_limit: 256
+  mem_limit: 3g
+  cpus: 2
+  logging: &logs
+    driver: local
+    options: {max-size: "10m", max-file: "5"}
+  environment: &environment
+    COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME}
+    APP_BIND: ${APP_BIND}
+    APP_PORT: ${APP_PORT}
+    APP_PUBLIC_BASE_URL: ${APP_PUBLIC_BASE_URL}
+    COOKIE_SECURE: ${COOKIE_SECURE}
+    LOG_LEVEL: ${LOG_LEVEL}
+    DATA_DIR: ${DATA_DIR}
+    DATABASE_HOST: ${DATABASE_HOST}
+    DATABASE_PORT: ${DATABASE_PORT}
+    DATABASE_NAME: ${DATABASE_NAME}
+    DATABASE_USER: ${DATABASE_USER}
+    DATABASE_PASSWORD: ${DATABASE_PASSWORD}
+    RABBITMQ_HOST: ${RABBITMQ_HOST}
+    RABBITMQ_PORT: ${RABBITMQ_PORT}
+    RABBITMQ_CONTAINER: ${RABBITMQ_CONTAINER}
+    RABBITMQ_USER: ${RABBITMQ_USER}
+    RABBITMQ_VHOST: ${RABBITMQ_VHOST}
+    RABBITMQ_QUEUE: ${RABBITMQ_QUEUE}
+    RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+    RABBITMQ_TIMEOUT_SECONDS: ${RABBITMQ_TIMEOUT_SECONDS}
+    API_KEYS: ${API_KEYS}
+    SESSION_SECRET: ${SESSION_SECRET}
+    DOWNLOAD_SECRET: ${DOWNLOAD_SECRET}
+    DOCLING_BASE_URL: ${DOCLING_BASE_URL}
+    DOCLING_API_KEY: ${DOCLING_API_KEY}
+    DOCLING_TIMEOUT_SECONDS: ${DOCLING_TIMEOUT_SECONDS}
+    DOCLING_WINDOW_PAGES: ${DOCLING_WINDOW_PAGES}
+    DOCLING_MAX_REQUEST_MB: ${DOCLING_MAX_REQUEST_MB}
+    SHARED_VLM_BASE_URL: ${SHARED_VLM_BASE_URL}
+    SHARED_VLM_MODEL: ${SHARED_VLM_MODEL}
+    VLM_TIMEOUT_SECONDS: ${VLM_TIMEOUT_SECONDS}
+    VLM_WINDOW_PAGES: ${VLM_WINDOW_PAGES}
+    VLM_OVERLAP_PAGES: ${VLM_OVERLAP_PAGES}
+    VLM_MAX_TOKENS: ${VLM_MAX_TOKENS}
+    MODEL_ATTEMPTS: ${MODEL_ATTEMPTS}
+    WORKER_CONCURRENCY: ${WORKER_CONCURRENCY}
+    WORKER_LEASE_SECONDS: ${WORKER_LEASE_SECONDS}
+    WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS}
+    QUEUE_MAX_DEPTH: ${QUEUE_MAX_DEPTH}
+    JOB_TIMEOUT_SECONDS: ${JOB_TIMEOUT_SECONDS}
+    RETENTION_SECONDS: ${RETENTION_SECONDS}
+    SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS}
+    UPLOAD_MAX_MB: ${UPLOAD_MAX_MB}
+    UPLOAD_MAX_FILES: ${UPLOAD_MAX_FILES}
+    UPLOAD_MAX_PAGES: ${UPLOAD_MAX_PAGES}
+    UPLOAD_TIMEOUT_SECONDS: ${UPLOAD_TIMEOUT_SECONDS}
+    IMAGE_MAX_PIXELS: ${IMAGE_MAX_PIXELS}
+    RENDER_MAX_SIDE: ${RENDER_MAX_SIDE}
+    CONVERSION_TIMEOUT_SECONDS: ${CONVERSION_TIMEOUT_SECONDS}
+    RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE}
+    MAX_OWNER_ACTIVE_JOBS: ${MAX_OWNER_ACTIVE_JOBS}
+    HEALTH_CACHE_SECONDS: ${HEALTH_CACHE_SECONDS}
+services:
+  postgres:
+    image: postgres:16.15-alpine3.23
+    restart: unless-stopped
+    networks: [private]
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    environment:
+      POSTGRES_USER: ${DATABASE_USER}
+      POSTGRES_DB: ${DATABASE_NAME}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 1g
+    cpus: 1
+    pids_limit: 128
+    logging: *logs
+  migrate:
+    <<: *app
+    command: [python, -m, alembic, upgrade, head]
+    restart: "no"
+    networks: [private]
+    profiles: [tools]
+  api:
+    <<: *app
+    command: [python, -m, app.main]
+    ports: ["${APP_BIND}:${APP_PORT}:${APP_PORT}"]
+    depends_on:
+      postgres: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -m, app.operations, api-health]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+  worker:
+    <<: *app
+    command: [python, -m, app.worker]
+    depends_on:
+      postgres: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -m, app.operations, worker-health]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+networks:
+  private: {internal: true}
+  ai-shared: {external: true, name: ai-shared}
+volumes:
+  artifacts:
+  postgres-data:

@@ -1,0 +1,46 @@
+# pyproject.toml
+# Зависимости монолита и единые настройки проверок для Windows/Linux.
+[project]
+name = "document-intake-ai"
+version = "1.0.0"
+description = "Автоматическое распознавание и комплектование документов для 1С"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+  "fastapi>=0.115,<1", "uvicorn>=0.34,<1", "pydantic-settings>=2.8,<3",
+  "sqlalchemy[asyncio]>=2.0.40,<3", "asyncpg>=0.30,<1", "alembic>=1.15,<2",
+  "aio-pika>=9.5,<10", "httpx>=0.28,<1", "jinja2>=3.1.6,<4",
+  "python-multipart>=0.0.20,<1", "pymupdf>=1.25.5,<2", "pillow>=11.2,<13",
+  "fastapi-offline>=1.7,<2",
+]
+
+[dependency-groups]
+dev = ["ruff>=0.11,<1", "pytest>=8.3,<10", "pytest-asyncio>=1,<2", "pytest-cov>=6,<8", "aiosqlite>=0.21,<1", "playwright>=1.51,<2", "pyyaml>=6,<7"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+exclude = ["examples", ".cache", "tmp"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "S"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S311"]
+"app/infrastructure/conversion.py" = ["S603", "S607"]
+"app/operations.py" = ["S603", "S607"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+  "live: реальные PostgreSQL/RabbitMQ/Docling/VLM, требует --live",
+  "browser: настоящий браузер, требует --browser",
+  "private: локальные исходные документы examples",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["app"]

@@ -1,0 +1,15 @@
+# .gitattributes
+# Shell и исходники сохраняют LF независимо от git autocrlf на Windows.
+* text=auto
+*.sh text eol=lf
+*.py text eol=lf
+*.ps1 text eol=lf
+*.js text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.png binary
+*.pdf binary

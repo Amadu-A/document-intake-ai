@@ -1,0 +1,30 @@
+<!-- app/web/templates/base.html -->
+<!-- Общий каркас светлого инженерного UI; внешние CDN и inline scripts не используются. -->
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>Document Intake AI</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="/static/js/app.js" type="module"></script>
+</head>
+<body class="page">
+  <header class="header">
+    <a class="header__brand" href="/" aria-label="Document Intake AI, главная">
+      <span class="header__logo" aria-hidden="true">▣</span>
+      <span>Document Intake AI<small class="header__subtitle">Распознавание и подготовка документов для 1С ДО</small></span>
+    </a>
+    <nav class="header__actions" aria-label="Действия с пакетом">
+      <span class="badge" data-ttl>Хранение: 1 час</span>
+      <button class="button" type="button" data-prompts-open>⌘ Промпты</button>
+      <button class="button button--teal" type="button" data-export disabled>↓ Экспорт JSON</button>
+      <button class="button button--primary" type="button" data-start disabled>▶ Запустить анализ</button>
+    </nav>
+  </header>
+  <main class="page__content">{% block content %}{% endblock %}</main>
+  <footer class="page__footer"><span>Docling + shared-VLM · Все приложения сохраняются в комплекте</span><a href="/docs" target="_blank" rel="noopener">REST API / документация</a></footer>
+  {% include 'components/prompts.html' %}
+</body>
+</html>

@@ -1,0 +1,77 @@
+{
+  "version": "1.0",
+  "description": "Подтверждённые критерии пяти пар; пользовательские оригиналы и ответы модели не включены",
+  "cases": [
+    {
+      "file": "4-2591.pdf",
+      "pages": 6,
+      "registrations": 1,
+      "physical_attachments": 4,
+      "checks": [
+        {"path": "classification.document_root", "expected": "Входящая/Исходящая корреспонденция", "page": 1},
+        {"path": "classification.direction", "expected": null, "page": 1},
+        {"path": "requisites.document_number", "expected": null, "page": 1},
+        {"path": "requisites.document_date", "expected": "2026-09-02", "page": 1},
+        {"path": "requisites.related_entities.contracts.0.number", "expected": "07-13052026-2", "page": 1},
+        {"path": "requisites.related_entities.contracts.0.date", "expected": "2026-05-13", "page": 1},
+        {"path": "requisites.amounts[type=penalty].value", "expected": 3309.81, "page": 2},
+        {"path": "requisites.response_due_date", "expected": null, "page": 2}
+      ]
+    },
+    {
+      "file": "ГП Взлет Портленд этап 2.pdf",
+      "pages": 1,
+      "registrations": 1,
+      "physical_attachments": 0,
+      "checks": [
+        {"path": "classification.document_root", "expected": "Входящая/Исходящая корреспонденция", "page": 1},
+        {"path": "classification.direction", "expected": null, "page": 1},
+        {"path": "requisites.document_number", "expected": null, "page": 1},
+        {"path": "requisites.document_date", "expected": "2026-10-22", "page": 1},
+        {"path": "requisites.related_entities.invoices.0.number", "expected": "7738", "page": 1}
+      ]
+    },
+    {
+      "file": "Исх №А-880-26 от 29.10.2026.pdf",
+      "pages": 1,
+      "registrations": 1,
+      "physical_attachments": 0,
+      "checks": [
+        {"path": "classification.document_root", "expected": "Входящая/Исходящая корреспонденция", "page": 1},
+        {"path": "classification.direction", "expected": null, "page": 1},
+        {"path": "requisites.document_number", "expected": "А-880/26", "page": 1},
+        {"path": "requisites.document_date", "expected": "2026-10-29", "page": 1},
+        {"path": "requisites.related_entities.contracts.0.number", "expected": "ВМСК-Пос-БМИ-4/26", "page": 1}
+      ]
+    },
+    {
+      "file": "Дополнительное соглашение № 1.pdf",
+      "pages": 1,
+      "registrations": 1,
+      "physical_attachments": 0,
+      "checks": [
+        {"path": "classification.document_root", "expected": "Договоры", "page": 1},
+        {"path": "classification.is_letter", "expected": false, "page": 1},
+        {"path": "requisites.document_number", "expected": "1", "page": 1},
+        {"path": "requisites.document_date", "expected": "2026-02-26", "page": 1},
+        {"path": "requisites.related_entities.contracts.0.number", "expected": "ВМСК-СО-19/25", "page": 1}
+      ]
+    },
+    {
+      "file": "Спецификация №3.pdf",
+      "pages": 1,
+      "registrations": 1,
+      "physical_attachments": 0,
+      "checks": [
+        {"path": "classification.document_root", "expected": "Составляющие документы договора", "page": 1},
+        {"path": "classification.is_letter", "expected": false, "page": 1},
+        {"path": "requisites.document_number", "expected": "03", "page": 1},
+        {"path": "requisites.document_date", "expected": "2026-03-11", "page": 1},
+        {"path": "requisites.related_entities.contracts.0.number", "expected": "ВМСК-88-0925", "page": 1},
+        {"path": "requisites.amounts[type=total].value", "expected": 1190781, "page": 1},
+        {"path": "requisites.amounts[type=vat].value", "expected": 214731, "page": 1},
+        {"path": "requisites.items.0.quantity", "expected": 3, "page": 1}
+      ]
+    }
+  ]
+}

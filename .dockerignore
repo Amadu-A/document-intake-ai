@@ -1,0 +1,20 @@
+# .dockerignore
+# Контекст сборки никогда не включает реальные документы, secrets и данные заданий.
+.git
+.env
+.env.*
+.env.init-*
+!.env.example
+examples
+renders
+.data
+.cache
+.venv
+.idea
+tmp
+output
+reports
+*.log
+**/__pycache__
+.pytest_cache
+.ruff_cache

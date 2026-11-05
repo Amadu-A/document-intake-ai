@@ -1,0 +1,47 @@
+<!-- app/web/templates/index.html -->
+<!-- Рабочие области просмотра страниц, решения VLM и подтверждённого результата. -->
+{% extends 'base.html' %}
+{% block content %}
+<section class="upload" aria-labelledby="upload-title" data-dropzone>
+  <div class="upload__input">
+    <h1 class="upload__title" id="upload-title">ЗАГРУЖЕННЫЕ ДОКУМЕНТЫ</h1>
+    <label class="upload__label" for="files">＋ Выберите файлы или перетащите сюда</label>
+    <input class="upload__file" id="files" type="file" multiple data-files accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,.tif,.tiff">
+    <p class="upload__hint">PDF, DOC, DOCX, TXT, JPG, PNG, TIFF · до {{ max_files }} файлов / {{ max_mb }} МБ</p>
+    <ul class="upload__queue" data-file-list></ul>
+  </div>
+  <div class="upload__mode"><strong>РЕЖИМ ОБРАБОТКИ</strong><p>Автоматическое разделение и извлечение</p><small>Приложения остаются в составе регистрационного документа</small></div>
+  <dl class="metrics"><div class="metrics__item"><dt>Файлов</dt><dd data-count-files>0</dd></div><div class="metrics__item"><dt>Документов</dt><dd data-count-documents>—</dd></div><div class="metrics__item metrics__item--teal"><dt>Приложений</dt><dd data-count-attachments>—</dd></div></dl>
+</section>
+<div class="notice" role="status" aria-live="polite" data-notice>Загрузите документы. Сервис самостоятельно определит состав пакета и подготовит PDF для каждой регистрации.</div>
+<div class="workspace">
+  <section class="panel viewer" aria-labelledby="viewer-title">
+    <div class="panel__heading"><h2 id="viewer-title">▤ Просмотр документа</h2><a class="badge" data-original hidden>Исходный файл ↓</a></div>
+    <div class="viewer__toolbar"><button class="button button--compact" type="button" data-previous aria-label="Предыдущая страница">‹</button><span data-page-label>Нет страниц</span><button class="button button--compact" type="button" data-next aria-label="Следующая страница">›</button><span class="viewer__spacer"></span><button class="button button--compact" type="button" data-zoom-out aria-label="Уменьшить">−</button><button class="button button--compact" type="button" data-fit>100%</button><button class="button button--compact" type="button" data-zoom-in aria-label="Увеличить">＋</button></div>
+    <p class="viewer__role" data-page-role>Физические страницы сохраняют исходный порядок</p>
+    <div class="viewer__canvas" data-viewer-canvas><p class="viewer__empty" data-viewer-empty>Здесь появятся страницы документа</p><img class="viewer__image" data-page-image alt="Текущая страница документа" hidden><object class="viewer__local-pdf" type="application/pdf" data-local-pdf hidden aria-label="Локальный просмотр PDF"></object></div>
+    <nav class="viewer__thumbnails" data-thumbnails aria-label="Страницы пакета"></nav>
+  </section>
+  <section class="panel structure" aria-labelledby="structure-title">
+    <div class="panel__heading"><h2 id="structure-title">◫ Структура пакета</h2><span class="panel__muted">VLM + Docling</span></div>
+    <p class="structure__status" data-structure-status>Решение модели появится после анализа</p>
+    <div class="structure__documents" data-documents></div>
+    <button class="button" type="button" data-cancel hidden>Отменить обработку</button>
+    <button class="button" type="button" data-new-analysis hidden>＋ Новый пакет</button>
+  </section>
+  <section class="panel result" aria-labelledby="result-title">
+    <div class="panel__heading"><h2 id="result-title">{ } Результат извлечения</h2><span class="badge" data-job-status>Ожидание</span></div>
+    <div class="tabs" role="tablist" aria-label="Результат">
+      <button class="tabs__tab" id="tab-json" role="tab" aria-selected="true" aria-controls="result-json" data-result-tab="json">JSON</button>
+      <button class="tabs__tab" id="tab-facts" role="tab" aria-selected="false" aria-controls="result-facts" data-result-tab="facts" tabindex="-1">Реквизиты</button>
+      <button class="tabs__tab" id="tab-stages" role="tab" aria-selected="false" aria-controls="result-stages" data-result-tab="stages" tabindex="-1">Этапы</button>
+    </div>
+    <p class="result__validation" data-validation>Экспорт: schema_version 1.0</p>
+    <section id="result-json" role="tabpanel" aria-labelledby="tab-json" data-result-panel="json"><pre class="result__json" data-json>Ожидание анализа…</pre></section>
+    <section id="result-facts" role="tabpanel" aria-labelledby="tab-facts" data-result-panel="facts" hidden><div class="result__facts" data-facts>Подтверждённые реквизиты появятся после проверки JSON.</div></section>
+    <section id="result-stages" role="tabpanel" aria-labelledby="tab-stages" data-result-panel="stages" hidden><ol class="journal" data-journal></ol></section>
+    <progress class="result__progress" data-progress max="100" value="0" aria-label="Прогресс обработки"></progress>
+    <ul class="result__warnings" data-warnings></ul>
+  </section>
+</div>
+{% endblock %}

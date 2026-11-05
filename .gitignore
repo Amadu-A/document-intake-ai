@@ -1,3 +1,14 @@
+# .gitignore
+# Исключает секреты, локальные документы и воспроизводимые данные разработки.
+examples/
+.data/
+tmp/
+output/
+.env.init-*
+reports/local/
+.idea/
+.playwright/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

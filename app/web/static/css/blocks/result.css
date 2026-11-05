@@ -1,0 +1,11 @@
+/* app/web/static/css/blocks/result.css */
+/* Подтверждённый JSON визуально отделён от непроверенного модельного потока. */
+.result__validation { font-size: 11px; color: var(--color-muted); }
+.result__json { background: var(--color-code); color: #bde1ec; border-radius: 12px; padding: 20px; font: 11px/1.8 Consolas, monospace; min-height: 430px; max-height: 67vh; overflow: auto; margin: 0; }
+.result__progress { width: 100%; height: 7px; margin: 15px 0 5px; accent-color: var(--color-blue); }
+.result__facts { overflow-wrap: anywhere; font-size: 12px; max-height: 65vh; overflow: auto; }
+.result__facts dt { font-weight: 600; padding-top: 9px; }
+.result__facts dd { margin-left: 0; color: #53708e; }
+.result__warnings { padding-left: 18px; color: #ad701a; font-size: 11px; }
+.journal { padding-left: 24px; font-size: 12px; max-height: 65vh; overflow: auto; }
+.journal li { padding: 6px 0; border-bottom: 1px solid #edf1f7; }

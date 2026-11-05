@@ -1,0 +1,34 @@
+/* app/web/static/css/blocks/layout.css */
+/* Верхняя панель, загрузка и три рабочие области; без page-specific inline CSS. */
+.header { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 16px 26px; background: var(--color-panel); border-bottom: 1px solid var(--color-line); }
+.header__brand { display: flex; gap: 13px; align-items: center; color: var(--color-text); font-size: 19px; font-weight: 700; white-space: nowrap; }
+.header__logo { display: grid; place-items: center; width: 40px; height: 40px; background: linear-gradient(135deg,#3274ff,#16bcc1); border-radius: 12px; color: white; font-size: 25px; box-shadow: 0 4px 15px #2c79ef21; }
+.header__subtitle { display: block; font-size: 11px; font-weight: 400; color: var(--color-muted); }
+.header__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; }
+.page__content { padding: 20px 26px; }
+.page__footer { display: flex; justify-content: space-between; gap: 20px; padding: 6px 28px 20px; color: var(--color-muted); font-size: 11px; }
+.upload { display: grid; grid-template-columns: 1.15fr .95fr auto; gap: 16px; align-items: start; }
+.upload__title, .upload__mode > strong { font-size: 11px; font-weight: 700; }
+.upload__title { margin-bottom: 7px; }
+.upload__label { display: block; padding: 12px; border: 1px solid #aac7ff; background: #f9fcff; color: #315787; border-radius: 9px; cursor: pointer; }
+.upload__file { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.upload__input:focus-within .upload__label { outline: 3px solid #6397ff; outline-offset: 3px; }
+.upload__hint, .upload__mode small { color: var(--color-muted); font-size: 11px; margin: 5px 0; }
+.upload__queue { margin: 4px 0; padding-left: 18px; max-height: 72px; overflow: auto; }
+.upload__mode > p { border: 1px solid var(--color-line); padding: 12px; border-radius: 9px; background: white; margin: 7px 0 0; }
+.upload--drag { outline: 3px dashed var(--color-blue); outline-offset: 5px; }
+.metrics { display: flex; gap: 10px; margin: 21px 0 0; }
+.metrics__item { padding: 9px 15px; border: 1px solid var(--color-line); border-radius: 12px; background: white; min-width: 90px; }
+.metrics__item dt { font-size: 10px; color: var(--color-muted); }
+.metrics__item dd { margin: 0; font-size: 22px; font-weight: 600; color: #315b96; }
+.metrics__item--teal dd { color: var(--color-teal); }
+.workspace { display: grid; grid-template-columns: minmax(300px,1.15fr) minmax(250px,.7fr) minmax(340px,1fr); gap: 16px; align-items: stretch; }
+.panel { padding: 17px; border: 1px solid var(--color-line); border-radius: var(--radius); background: var(--color-panel); box-shadow: var(--shadow); min-width: 0; min-height: 650px; }
+.panel__heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 18px; }
+.panel__muted { color: var(--color-muted); font-size: 11px; }
+.structure__status { color: var(--color-muted); font-size: 12px; padding: 12px; background: #f4f8ff; border-radius: 10px; }
+.structure__documents { display: grid; gap: 13px; margin-bottom: 18px; }
+.structure__document { padding: 13px; border: 1px solid #c3d9ff; border-radius: 12px; background: #f8fbff; }
+.structure__pages { display: flex; flex-wrap: wrap; gap: 4px; margin: 10px 0; }
+.structure__attachment { border-top: 1px solid #e1eaf5; padding: 8px 0; font-size: 11px; }
+.structure__reason { color: var(--color-muted); font-size: 11px; }
