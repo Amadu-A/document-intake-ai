@@ -5,6 +5,8 @@ import asyncio
 from contextlib import suppress
 from datetime import timedelta
 
+import pytest
+
 from app.domain.jobs import utcnow
 from app.infrastructure.database import JobRow
 from app.worker import maintenance, process
@@ -51,6 +53,39 @@ async def test_worker_stops_analysis_after_lease_revocation(container):
     assert (await container.database.get(job.id)).status == "cancelled"
 
 
+async def test_external_worker_cancel_propagates_to_consumer_loop(container):
+    """Остановка consumer не поглощается process после отмены дочернего analysis."""
+    started, stopped, continued = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    class WaitingAnalysis:
+        """Даёт отменить worker именно во время активного use-case."""
+
+        async def execute(self, job):
+            """Фиксирует cleanup дочерней операции перед выходом из consumer."""
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.set()
+
+    container.analysis = WaitingAnalysis()
+    job = await container.intake.upload(
+        "integration:onec", [MemoryUpload(pdf_bytes())], None, None, True
+    )
+
+    async def consumer():
+        """После внешней отмены следующий виток доставки недопустим."""
+        await process(container, job.id)
+        continued.set()
+
+    task = asyncio.create_task(consumer())
+    await asyncio.wait_for(started.wait(), 3)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 3)
+    assert task.cancelled() and stopped.is_set() and not continued.is_set()
+
+
 async def test_real_reaper_cycle_removes_expired_payload(container, monkeypatch):
     """Maintenance удаляет истёкший оригинал и DB payload, сохраняя active job."""
     monkeypatch.setattr(
@@ -59,6 +94,7 @@ async def test_real_reaper_cycle_removes_expired_payload(container, monkeypatch)
     expired = await container.intake.upload(
         "integration:onec", [MemoryUpload(pdf_bytes())], None, None, False
     )
+    await process(container, expired.id)
     active = await container.intake.upload(
         "integration:onec", [MemoryUpload(pdf_bytes())], None, None, False
     )

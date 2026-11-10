@@ -1,42 +1,46 @@
 // app/web/static/js/features/viewer.js
-/** Просмотр физических страниц; обновления SSE сохраняют выбранную пользователем страницу. */
+/** Просмотр по PageRef с загрузкой только выбранного окна миниатюр. */
+import { pageKey } from "./boundary_state.js";
+
 export function createViewer() {
-  /** Возвращает API обновления рендеров и переходов без изменения VLM-плана. */
-  let pages = [], sources = [], selected = 0, plan = null, zoom = 100, localURL = null;
-  const image = document.querySelector("[data-page-image]");
-  const empty = document.querySelector("[data-viewer-empty]");
-  const local = document.querySelector("[data-local-pdf]");
-  const thumbnails = document.querySelector("[data-thumbnails]");
-  function show() {
-    /** Рисует текущую страницу; принадлежность основному тексту/приложению берёт из VLM-плана. */
+  /** Сохраняет физический выбор при progressive preview, polling и обновлении плана. */
+  let pages = [], sources = [], selected = 0, zoom = 100, localURL = null, sequence = 0;
+  let load = async p => p, onSelect = () => {}, role = () => "Физическая страница";
+  const image = document.querySelector("[data-page-image]"), empty = document.querySelector("[data-viewer-empty]");
+  const local = document.querySelector("[data-local-pdf]"), thumbnails = document.querySelector("[data-thumbnails]");
+  async function show() {
+    /** Ответ старого запроса не переключает страницу после нового выбора. */
     if (!pages.length) return;
-    image.src = pages[selected].preview_url;
-    image.hidden = false; local.hidden = true; empty.hidden = true;
-    image.alt = "Страница " + pages[selected].page_number + " исходного документа";
+    const token = ++sequence, ref = pages[selected]; onSelect(ref);
     document.querySelector("[data-page-label]").textContent = `Страница ${selected + 1} из ${pages.length}`;
-    thumbnails.querySelectorAll("button").forEach((button, index) => {
-      if (index === selected) button.setAttribute("aria-current", "page");
-      else button.removeAttribute("aria-current");
-    });
-    const current = pages[selected];
-    let role = "Принадлежность определяется VLM";
-    for (const doc of plan?.documents || []) {
-      if (doc.main_pages.some(p => p.file_id === current.file_id && p.page_number === current.page_number)) role = "Основной документ " + doc.document_index;
-      for (const attachment of doc.attachments) {
-        if (attachment.pages.some(p => p.file_id === current.file_id && p.page_number === current.page_number)) role = "Приложение: " + attachment.kind;
-      }
+    const original = sources.find(s => s.file_id === ref.file_id);
+    document.querySelector("[data-page-role]").textContent = role(ref) + (original ? " · " + original.file_name : "");
+    if (original) { const link = document.querySelector("[data-original]"); link.hidden = false; link.href = original.file_url; }
+    const begin = Math.max(0, selected - 5), windowPages = pages.slice(begin, begin + 11);
+    thumbnails.replaceChildren();
+    for (const [i, page] of windowPages.entries()) {
+      const button = document.createElement("button"); button.type = "button"; button.className = "viewer__thumbnail";
+      button.setAttribute("aria-label", "Страница " + (begin + i + 1));
+      if (begin + i === selected) button.setAttribute("aria-current", "page");
+      const number = document.createElement("span"); number.textContent = begin + i + 1; button.append(number);
+      button.addEventListener("click", () => { selected = begin + i; show(); }); thumbnails.append(button);
+      load(page).then(meta => {
+        if (token !== sequence || !meta?.thumbnail_url) return;
+        const thumb = document.createElement("img"); thumb.src = meta.thumbnail_url; thumb.alt = ""; thumb.loading = "lazy"; button.prepend(thumb);
+      }).catch(() => {});
     }
-    const original = sources.find(source => source.file_id === current.file_id);
-    document.querySelector("[data-page-role]").textContent = role + (original ? " · " + original.file_name : "");
-    if (original) {
-      const link = document.querySelector("[data-original]");
-      link.hidden = false; link.href = original.file_url;
-    }
+    try {
+      const meta = await load(ref); if (token !== sequence) return;
+      local.hidden = true; image.hidden = !meta?.preview_url; empty.hidden = !!meta?.preview_url;
+      if (meta?.preview_url) {
+        if (image.getAttribute("src") !== meta.preview_url) image.src = meta.preview_url;
+        image.alt = "Страница " + ref.page_number + " исходного документа";
+      } else empty.textContent = "Превью этой страницы ещё готовится…";
+    } catch { if (token === sequence) { image.hidden = true; empty.hidden = false; empty.textContent = "Превью временно недоступно"; } }
   }
   function setZoom(value) {
-    /** Выбирает ограниченную ступень масштаба; CSS остаётся отдельным модулем. */
-    zoom = value;
-    image.className = "viewer__image" + (zoom === 100 ? "" : " viewer__image--zoom-" + zoom);
+    /** Ограничивает ступени масштаба CSS-классами. */
+    zoom = value; image.className = "viewer__image" + (zoom === 100 ? "" : " viewer__image--zoom-" + zoom);
     document.querySelector("[data-fit]").textContent = zoom + "%";
   }
   document.querySelector("[data-previous]").addEventListener("click", () => { selected = Math.max(0, selected - 1); show(); });
@@ -46,41 +50,23 @@ export function createViewer() {
   document.querySelector("[data-zoom-in]").addEventListener("click", () => setZoom(levels[Math.min(4, levels.indexOf(zoom) + 1)]));
   document.querySelector("[data-zoom-out]").addEventListener("click", () => setZoom(levels[Math.max(0, levels.indexOf(zoom) - 1)]));
   return {
-    update(snapshot) {
-      /** Перестраивает миниатюры только при изменении набора страниц; ручной выбор сохраняется. */
-      plan = snapshot.plan;
-      sources = snapshot.sources || [];
-      const incoming = snapshot.pages || [];
-      if (incoming.length !== pages.length || incoming.some((p, i) => p.file_id !== pages[i]?.file_id)) {
-        pages = incoming; selected = Math.max(0, Math.min(selected, pages.length - 1));
-        thumbnails.replaceChildren();
-        pages.forEach((page, index) => {
-          const button = document.createElement("button"); button.type = "button";
-          button.className = "viewer__thumbnail"; button.setAttribute("aria-label", "Страница " + (index + 1));
-          const thumbnail = document.createElement("img"); thumbnail.src = page.preview_url; thumbnail.alt = ""; thumbnail.loading = "lazy";
-          const number = document.createElement("span"); number.textContent = index + 1;
-          button.append(thumbnail, number); button.addEventListener("click", () => { selected = index; show(); });
-          thumbnails.append(button);
-        });
-        show();
-      } else { pages = incoming; if (pages.length) show(); }
-      const original = document.querySelector("[data-original]");
-      const source = snapshot.sources?.find(s => s.file_id === pages[selected]?.file_id) || snapshot.sources?.[0];
-      if (source) { original.hidden = false; original.href = source.file_url; }
+    configure(loader, select, describe) { /** Подключает пагинацию и общий выбор редактора. */ load = loader; onSelect = select; role = describe; },
+    update(snapshot, refs) {
+      /** Применяет метаданные без сброса выбранной физической страницы. */
+      const previous = pages[selected]; sources = snapshot.sources || []; pages = refs || snapshot.pages || [];
+      const found = previous ? pages.findIndex(p => pageKey(p) === pageKey(previous)) : 0;
+      selected = Math.max(0, found); show();
     },
-    select(ref) {
-      /** Переходит к странице из карточки приложения или предупреждения. */
-      const index = pages.findIndex(p => p.file_id === ref.file_id && p.page_number === ref.page_number);
-      if (index >= 0) { selected = index; show(); }
-    },
+    select(ref) { /** Переходит по паре source/page. */ const index = pages.findIndex(p => pageKey(p) === pageKey(ref)); if (index >= 0) { selected = index; show(); } },
     local(file) {
-      /** Даёт предварительный локальный просмотр PDF/изображения до запуска серверной обработки. */
+      /** До серверного превью не открывает тяжёлый PDF целиком в браузере. */
       if (localURL) URL.revokeObjectURL(localURL);
-      if (!file) return;
-      localURL = URL.createObjectURL(file); pages = []; thumbnails.replaceChildren();
+      pages = []; thumbnails.replaceChildren(); sequence++;
+      if (!file || file.size > 25 * 1024 * 1024) { local.hidden = true; image.hidden = true; empty.hidden = false; empty.textContent = "Готовим серверные превью…"; return; }
+      localURL = URL.createObjectURL(file);
       if (file.type === "application/pdf") { local.data = localURL; local.hidden = false; image.hidden = true; empty.hidden = true; }
       else if (["image/jpeg", "image/png"].includes(file.type)) { image.src = localURL; image.hidden = false; local.hidden = true; empty.hidden = true; }
-      else { local.hidden = true; image.hidden = true; empty.hidden = false; empty.textContent = "Рендер появится при обработке на сервере"; }
+      else { local.hidden = true; image.hidden = true; empty.hidden = false; empty.textContent = "Готовим серверные превью…"; }
     },
   };
 }

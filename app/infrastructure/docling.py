@@ -2,7 +2,12 @@
 """Аутентифицированный Docling OCR/layout/table с техническими окнами до 50 страниц."""
 
 import asyncio
+import hashlib
 import json
+import os
+import shutil
+import sys
+import tempfile
 from pathlib import Path
 
 import httpx
@@ -12,6 +17,7 @@ from app.application.ports import Emit
 from app.core.observability import timed
 from app.domain.errors import IntakeError
 from app.domain.segmentation import windows
+from app.infrastructure.conversion import stop_process
 
 
 def response_error(response: httpx.Response) -> IntakeError:
@@ -153,6 +159,107 @@ class DoclingOCR:
         """Принимает проверенную конфигурацию и HTTP-клиент без чтения чужих секретов."""
         self.settings, self.client = settings, client
 
+    def _cache_key(self, page: dict) -> dict:
+        """Привязывает OCR к исходнику, физической странице и действующим параметрам адаптера."""
+        source = page.get("source_sha256")
+        if not source:
+            info = Path(page["pdf"]).stat()
+            source = [str(Path(page["pdf"]).resolve()), info.st_size, info.st_mtime_ns]
+        return {
+            "version": 1,
+            "source": source,
+            "page": page["page_number"],
+            "preset": self.settings.docling_ocr_preset,
+            "languages": list(self.settings.docling_ocr_languages),
+        }
+
+    def _cached(self, page: dict) -> dict | None:
+        """Читает durable OCR checkpoint только при совпадении fingerprint и SHA-256 JSON."""
+        path = Path(page["preview"]).with_suffix(".ocr.json")
+        try:
+            metadata = json.loads(path.with_suffix(".meta.json").read_text("utf-8"))
+            raw = path.read_bytes()
+            if (
+                metadata["key"] != self._cache_key(page)
+                or metadata["sha256"] != hashlib.sha256(raw).hexdigest()
+            ):
+                return None
+            context = vision_context(json.loads(raw))
+            return {**page, "ocr": context[:20000], "ocr_truncated": len(context) > 20000}
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+    def _save_cache(self, page: dict, raw: str) -> None:
+        """Атомарно публикует JSON и fingerprint, не сохраняя OCR в событиях или логах."""
+        path = Path(page["preview"]).with_suffix(".ocr.json")
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(raw, "utf-8")
+        temporary.replace(path)
+        metadata = {
+            "key": self._cache_key(page),
+            "sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        }
+        target = path.with_suffix(".meta.json")
+        temporary = target.with_suffix(".tmp")
+        temporary.write_text(json.dumps(metadata), "utf-8")
+        temporary.replace(target)
+
+    async def _isolated_pdf(self, pages: list[dict], limit: int) -> bytes | None:
+        """Большие PDF копируются в child; parent читает лишь уже проверенное окно до 45 МиБ."""
+        directory = Path(
+            await asyncio.to_thread(
+                tempfile.mkdtemp, prefix=".ocr-window-", dir=Path(pages[0]["preview"]).parent
+            )
+        )
+        request, target = directory / "request.json", directory / "window.pdf"
+        payload = {
+            "operation": "ocr_window",
+            "pages": [{"pdf": p["pdf"], "page_number": p["page_number"]} for p in pages],
+            "target": str(target),
+            "settings": {"timeout": self.settings.docling_timeout_seconds},
+        }
+        environment = {
+            key: os.environ[key] for key in ("PATH", "SystemRoot", "WINDIR") if key in os.environ
+        }
+        environment.update({"PYTHONDONTWRITEBYTECODE": "1", "LANG": "C.UTF-8"})
+        process = None
+        try:
+            await asyncio.to_thread(request.write_text, json.dumps(payload), "utf-8")
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-m",
+                "app.infrastructure.conversion",
+                str(request),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+                start_new_session=sys.platform != "win32",
+                env=environment,
+            )
+            try:
+                async with asyncio.timeout(self.settings.docling_timeout_seconds):
+                    await process.communicate()
+            except TimeoutError as exc:
+                await stop_process(process)
+                raise IntakeError(
+                    "docling_unavailable", "Истёк срок подготовки OCR-окна", 503
+                ) from exc
+            if process.returncode:
+                if len(pages) > 1:
+                    return None
+                raise IntakeError(
+                    "file_conversion_failed", "Не удалось подготовить страницу для OCR"
+                )
+            size = await asyncio.to_thread(lambda: target.stat().st_size)
+            if size > limit:
+                return None
+            return await asyncio.to_thread(target.read_bytes)
+        except BaseException:
+            if process is not None and process.returncode is None:
+                await stop_process(process)
+            raise
+        finally:
+            await asyncio.to_thread(shutil.rmtree, directory)
+
     @timed("document_ocr")
     async def recognize(self, pages: list[dict], emit: Emit) -> list[dict]:
         """Разбивает большой вход на OCR-окна и восстанавливает глобальные page identifiers."""
@@ -160,13 +267,35 @@ class DoclingOCR:
             raise IntakeError("docling_unavailable", "Не настроен DOCLING_API_KEY проекта", 503)
         result = []
         for chunk in windows(pages, self.settings.docling_window_pages):
-            result.extend(await self._window(chunk, emit))
+            saved = {}
+            missing = []
+            for page in chunk:
+                cached = await asyncio.to_thread(self._cached, page)
+                if cached is None:
+                    missing.append(page)
+                else:
+                    saved[(page["file_id"], page["page_number"])] = cached
+            if missing:
+                for page in await self._window(missing, emit):
+                    saved[(page["file_id"], page["page_number"])] = page
+            result.extend(saved[(p["file_id"], p["page_number"])] for p in chunk)
         return result
 
     async def _window(self, pages: list[dict], emit: Emit) -> list[dict]:
         """Уменьшает только технический размер OCR-запроса при превышении byte-лимита."""
-        content = await asyncio.to_thread(window_pdf, pages)
-        if len(content) > self.settings.docling_max_request_mb * 1024 * 1024:
+        limit = self.settings.docling_max_request_mb * 1024 * 1024
+
+        def large_sources() -> bool:
+            """Оценивает суммарный размер уникальных источников до их открытия в parent."""
+            return sum(Path(path).stat().st_size for path in {p["pdf"] for p in pages}) > limit
+
+        isolated = await asyncio.to_thread(large_sources)
+        content = (
+            await self._isolated_pdf(pages, limit)
+            if isolated
+            else await asyncio.to_thread(window_pdf, pages)
+        )
+        if content is None or len(content) > limit:
             if len(pages) == 1:
                 raise IntakeError(
                     "docling_request_limit", "Страница превышает лимит запроса Docling"
@@ -219,8 +348,7 @@ class DoclingOCR:
                         if any(p.get("page_no") == number for p in item.get("prov", [])):
                             items.append({"kind": kind, **item})
                 raw = json.dumps(items, ensure_ascii=False)
-                target = Path(page["preview"]).with_suffix(".ocr.json")
-                await asyncio.to_thread(target.write_text, raw, "utf-8")
+                await asyncio.to_thread(self._save_cache, page, raw)
                 context = vision_context(items)
                 if len(context) > 20000:
                     await emit(

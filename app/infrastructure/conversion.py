@@ -4,10 +4,13 @@
 import ctypes
 import json
 import os
+import shutil
+import signal
 import subprocess
 import sys
 import warnings
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -27,6 +30,40 @@ MIMES = {
     ".tif": "image/tiff",
     ".tiff": "image/tiff",
 }
+
+
+async def stop_process(process) -> None:
+    """Завершает изолированный конвертер и дренирует pipe, включая отмену родителя."""
+    if process.returncode is None:
+        try:
+            if sys.platform != "win32":
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+        except ProcessLookupError:
+            pass
+    await process.communicate()
+
+
+def write_ocr_window(pages: list[dict], target: Path) -> None:
+    """Собирает PDF OCR-окна на диске в ограниченном дочернем процессе."""
+    result, readers = pymupdf.open(), {}
+    try:
+        for page in pages:
+            if page["pdf"] not in readers:
+                readers[page["pdf"]] = pymupdf.open(page["pdf"])
+            result.insert_pdf(
+                readers[page["pdf"]],
+                from_page=page["page_number"] - 1,
+                to_page=page["page_number"] - 1,
+                links=False,
+                annots=False,
+            )
+        result.save(target, garbage=4, deflate=True)
+    finally:
+        result.close()
+        for reader in readers.values():
+            reader.close()
 
 
 def validate_signature(path: Path, suffix: str) -> str:
@@ -143,7 +180,9 @@ def restrict_process(timeout: int) -> None:
         library.seccomp_release(context)
 
 
-def convert(path: Path, target: Path, settings: dict) -> dict:
+def convert(
+    path: Path, target: Path, settings: dict, progress: Callable[[str, dict], None] | None = None
+) -> dict:
     """Нормализует один оригинал в PDF и страницы, не меняя порядок или исходник."""
     suffix = path.suffix.lower()
     validate_signature(path, suffix)
@@ -152,17 +191,22 @@ def convert(path: Path, target: Path, settings: dict) -> dict:
     if suffix in {".doc", ".docx", ".txt"}:
         office_input = path
         if suffix == ".txt":
-            raw = path.read_bytes()
-            try:
-                text = (
-                    raw.decode("utf-16")
-                    if raw.startswith((b"\xff\xfe", b"\xfe\xff"))
-                    else raw.decode("utf-8-sig")
-                )
-            except UnicodeDecodeError:
-                text = raw.decode("cp1251")
+            with path.open("rb") as stream:
+                header = stream.read(4)
+            encoding = "utf-16" if header.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig"
             office_input = target / "text-input.txt"
-            office_input.write_text(text, encoding="utf-8")
+            try:
+                with (
+                    path.open("r", encoding=encoding) as source,
+                    office_input.open("w", encoding="utf-8") as output_text,
+                ):
+                    shutil.copyfileobj(source, output_text, length=64 * 1024)
+            except UnicodeDecodeError:
+                with (
+                    path.open("r", encoding="cp1251") as source,
+                    office_input.open("w", encoding="utf-8") as output_text,
+                ):
+                    shutil.copyfileobj(source, output_text, length=64 * 1024)
         profile = target / "office-profile"
         profile.mkdir(mode=0o700)
         (profile / "user").mkdir()
@@ -236,8 +280,14 @@ def convert(path: Path, target: Path, settings: dict) -> dict:
         document.save(output, garbage=4, deflate=True)
     if not 0 < len(document) <= settings["max_pages"]:
         raise IntakeError("page_limit", "Недопустимое число страниц")
+    if progress:
+        progress("source_discovered", {"page_count": len(document)})
     pages = []
     for number, page in enumerate(document, 1):
+        if shutil.disk_usage(target).free < settings.get("min_free_bytes", 0):
+            raise IntakeError(
+                "storage_insufficient", "Недостаточно места для подготовки страниц", 507
+            )
         rect = page.rect
         if not 1 <= rect.width <= 20000 or not 1 <= rect.height <= 20000:
             raise IntakeError("corrupt_document", "Недопустимая геометрия PDF")
@@ -245,7 +295,20 @@ def convert(path: Path, target: Path, settings: dict) -> dict:
         preview = target / f"page-{number}.png"
         pixmap = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
         pixmap.save(preview)
-        pages.append({"page_number": number, "preview": str(preview), "pdf": str(output)})
+        thumbnail = target / f"thumb-{number}.png"
+        small = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+        small.thumbnail((180, 180), Image.Resampling.LANCZOS)
+        small.save(thumbnail)
+        small.close()
+        item = {
+            "page_number": number,
+            "preview": str(preview),
+            "thumbnail": str(thumbnail),
+            "pdf": str(output),
+        }
+        pages.append(item)
+        if progress:
+            progress("page_ready", item)
     document.close()
     return {"pages": pages, "normalized_pdf": str(output)}
 
@@ -256,7 +319,16 @@ def main() -> int:
     try:
         data = json.loads(request.read_text("utf-8"))
         restrict_process(data["settings"]["timeout"])
-        result = convert(Path(data["path"]), Path(data["target"]), data["settings"])
+        if data.get("operation") in {"ocr_window", "pdf_pages"}:
+            write_ocr_window(data["pages"], Path(data["target"]))
+            print(json.dumps({"byte_size": Path(data["target"]).stat().st_size}))
+            return 0
+
+        def progress(kind: str, payload: dict) -> None:
+            """Передаёт метаданные только родительскому процессу через закрытый stdout pipe."""
+            print(json.dumps({"event": kind, "data": payload}), flush=True)
+
+        result = convert(Path(data["path"]), Path(data["target"]), data["settings"], progress)
         request.with_suffix(".result.json").write_text(json.dumps(result), "utf-8")
         return 0
     except IntakeError as exc:

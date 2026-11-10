@@ -3,18 +3,20 @@
 
 import asyncio
 
+from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
-
-from app.domain.errors import IntakeError
 
 
 class SecurityMiddleware:
     """Ограничивает Content-Length и chunked upload; заголовки не содержат секретов."""
 
-    def __init__(self, app, max_bytes: int, upload_timeout: int) -> None:
-        """Фиксирует лимит на весь запрос, включая multipart overhead."""
+    def __init__(
+        self, app, max_bytes: int, upload_timeout: int, json_max_bytes: int = 4 * 1024 * 1024
+    ) -> None:
+        """Фиксирует отдельные бюджеты multipart и остальных HTTP body."""
         self.app, self.max_bytes = app, max_bytes
         self.upload_timeout = upload_timeout
+        self.json_max_bytes = json_max_bytes
 
     async def __call__(self, scope, receive, send) -> None:
         """Защищает HTTP, сохраняя ASGI streaming и отказ до чтения oversized payload."""
@@ -23,11 +25,17 @@ class SecurityMiddleware:
             return
         count = 0
         headers = dict(scope["headers"])
+        file_upload = (
+            scope["method"] == "POST"
+            and scope["path"].rstrip("/") in {"/api/v1/jobs", "/api/v1/uploads"}
+            and headers.get(b"content-type", b"").lower().startswith(b"multipart/form-data")
+        )
+        body_limit = self.max_bytes if file_upload else min(self.max_bytes, self.json_max_bytes)
         try:
             length = int(headers.get(b"content-length", b"0"))
         except ValueError:
-            length = self.max_bytes + 1
-        if length > self.max_bytes:
+            length = body_limit + 1
+        if length > body_limit:
             await JSONResponse(
                 {"error": {"code": "upload_limit", "message": "Превышен размер запроса"}},
                 status_code=413,
@@ -39,8 +47,8 @@ class SecurityMiddleware:
             nonlocal count
             message = await receive()
             count += len(message.get("body", b""))
-            if count > self.max_bytes:
-                raise IntakeError("upload_limit", "Превышен размер запроса", 413)
+            if count > body_limit:
+                raise HTTPException(status_code=413, detail="Превышен размер запроса")
             return message
 
         async def secured_send(message):

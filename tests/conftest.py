@@ -9,6 +9,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.application.analysis import Analyze
+from app.application.boundaries import ManageBoundaries
 from app.application.exports import Exports
 from app.application.intake import Intake
 from app.application.prompts import Prompts
@@ -77,6 +78,7 @@ async def container(settings):
         capabilities=capabilities,
         prompts=prompts,
         intake=intake,
+        boundaries=ManageBoundaries(database, intake, prompts),
         exports=exports,
         vision=vision,
         health=SyntheticHealth(),

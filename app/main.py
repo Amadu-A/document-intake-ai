@@ -57,6 +57,7 @@ def create_app(container=None) -> FastAPI:
         SecurityMiddleware,
         max_bytes=(settings.upload_max_mb + 1) * 1024 * 1024,
         upload_timeout=settings.upload_timeout_seconds,
+        json_max_bytes=settings.http_json_max_mb * 1024 * 1024,
     )
     application.include_router(router)
     application.mount("/static", StaticFiles(directory=WEB / "static"), name="static")
@@ -91,7 +92,12 @@ def create_app(container=None) -> FastAPI:
     async def transport_error(_request: Request, exc: StarletteHTTPException):
         """Приводит ошибки multipart/routing к безопасному общему error envelope."""
         return JSONResponse(
-            {"error": {"code": "invalid_request", "message": "Запрос отклонён"}},
+            {
+                "error": {
+                    "code": "upload_limit" if exc.status_code == 413 else "invalid_request",
+                    "message": "Запрос отклонён",
+                }
+            },
             status_code=exc.status_code,
         )
 
@@ -127,6 +133,9 @@ def create_app(container=None) -> FastAPI:
                 "csrf_token": root.capabilities.csrf(token),
                 "max_files": settings.upload_max_files,
                 "max_mb": settings.upload_max_mb,
+                "max_file_mb": settings.upload_max_file_mb,
+                "max_file_pages": settings.upload_max_file_pages,
+                "max_pages": settings.upload_max_pages,
             },
         )
         response.set_cookie(

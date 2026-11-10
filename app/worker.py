@@ -21,7 +21,10 @@ async def process(container: Container, job_id: str) -> None:
     job = await container.database.claim(job_id)
     if not job:
         return
-    analysis = asyncio.create_task(container.analysis.execute(job))
+    operation = (
+        container.analysis.prepare if job.work_kind == "prepare" else container.analysis.execute
+    )
+    analysis = asyncio.create_task(operation(job))
     try:
         while not analysis.done():
             done, _ = await asyncio.wait(
@@ -37,6 +40,9 @@ async def process(container: Container, job_id: str) -> None:
         analysis.cancel()
         with contextlib.suppress(asyncio.CancelledError, LeaseLost):
             await analysis
+        if asyncio.current_task().cancelling():
+            # Внешняя остановка worker должна прерывать и вызывающий consumer loop.
+            raise asyncio.CancelledError from None
     except Exception:
         logging.getLogger("intake").error('{"event":"worker_failure","status":"error"}')
 

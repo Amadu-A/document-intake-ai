@@ -220,6 +220,7 @@ async def test_ttl_denies_access_before_physical_cleanup(client, container, monk
     response = await submit(client, endpoint="uploads")
     job_id = response.json()["job_id"]
     url = response.json()["sources"][0]["file_url"]
+    await run_job(container, job_id)
     expired_at = (await container.database.get(job_id)).expires_at + timedelta(seconds=1)
     monkeypatch.setattr("app.domain.jobs.utcnow", lambda: expired_at)
     monkeypatch.setattr("app.infrastructure.security.utcnow", lambda: expired_at)
@@ -271,7 +272,12 @@ async def test_signature_mime_and_format_limits(client, name, mime, payload):
 async def test_upload_size_is_checked_before_multipart_parser(client, container):
     """Слишком большой Content-Length отклоняется до spool файлов на диск."""
     response = await client.post(
-        "/api/v1/jobs", headers={**KEY, "Content-Length": str(500 * 1024 * 1024)}, content=b"x"
+        "/api/v1/jobs",
+        headers={
+            **KEY,
+            "Content-Length": str((container.settings.upload_max_mb + 2) * 1024 * 1024),
+        },
+        content=b"x",
     )
     assert response.status_code == 413
     assert not list(container.storage.root.iterdir())

@@ -5,6 +5,7 @@
 @import url("./blocks/layout.css");
 @import url("./blocks/controls.css");
 @import url("./blocks/viewer.css");
+@import url("./blocks/boundaries.css");
 @import url("./blocks/result.css");
 @import url("./blocks/modal.css");
 @import url("./responsive.css");

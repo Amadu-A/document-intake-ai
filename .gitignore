@@ -1,6 +1,11 @@
 # .gitignore
 # Исключает секреты, локальные документы и воспроизводимые данные разработки.
 examples/
+# Утверждённые частные reference с возможными реквизитами документов.
+renders/document_intake_boundary_modes_demo.html
+renders/document_intake_mode_auto.png
+renders/document_intake_mode_manual.png
+renders/document_intake_mode_skip.png
 .data/
 tmp/
 output/

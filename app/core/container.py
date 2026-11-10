@@ -7,6 +7,7 @@ import httpx
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.application.analysis import Analyze
+from app.application.boundaries import ManageBoundaries
 from app.application.exports import Exports
 from app.application.intake import Intake
 from app.application.prompts import Prompts
@@ -40,7 +41,8 @@ class Container:
         self.capabilities = Capabilities(settings)
         self.prompts = Prompts(self.database, Path(__file__).resolve().parents[2] / "prompts")
         self.intake = Intake(self.database, self.storage, self.prompts)
-        self.exports = Exports(self.intake, self.capabilities)
+        self.boundaries = ManageBoundaries(self.database, self.intake, self.prompts)
+        self.exports = Exports(self.intake, self.capabilities, settings.document_max_pages)
         self.vision = SharedVision(settings, self.http)
         self.ocr = DoclingOCR(settings, self.http)
         self.rabbit = Rabbit(settings)

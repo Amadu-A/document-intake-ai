@@ -15,7 +15,7 @@ Swagger и его JS/CSS обслуживаются локально на `/docs
 | Запрос | Результат |
 |---|---|
 | `POST /api/v1/jobs` | Multipart `files` 1..N, необязательный `organization_hint`; `202` и `job_id` |
-| `POST /api/v1/uploads` | Сохранение до запуска, `202`; TTL от загрузки |
+| `POST /api/v1/uploads` | `202 uploaded`, отдельная подготовка превью без OCR/VLM |
 | `POST /api/v1/jobs/{id}/start` | Запуск сохранённой пачки, snapshots обоих промптов |
 | `GET /api/v1/jobs/{id}` | Статус, этап, прогресс, cursor, timestamps, source/artifact metadata |
 | `GET /api/v1/jobs/{id}/snapshot` | Тот же атомарный снимок для reconnect |
@@ -34,8 +34,10 @@ Swagger и его JS/CSS обслуживаются локально на `/docs
 Повтор owner + key + те же файлы/контекст/prompts возвращает прежнее задание.
 Другой payload с тем же ключом — `409 idempotency_conflict`. Название файла и порядок
 источников входят в hash запроса. Retry повторяет исходные bytes, а не пересозданный PDF.
+Для default-режима сохранён прежний hash, поэтому retry ключей до обновления совместим.
+`/uploads` не фиксирует промпты в hash: snapshots снимаются при start/confirm.
 
-Статусы: `uploaded`, `queued`, `running`, `completed`, `completed_with_warnings`,
+Статусы: `uploaded`, `queued`, `running`, `awaiting_confirmation`, `completed`, `completed_with_warnings`,
 `failed`, `cancelled`. После TTL доступ немедленно запрещён с `410 job_expired`;
 после физического удаления записи возможен `404`. Чужой owner получает `404`.
 При ошибке распознавания статус содержит безопасный `error` и ссылки на исходники;
@@ -44,6 +46,93 @@ Swagger и его JS/CSS обслуживаются локально на `/docs
 SSE-события имеют возрастающий `id`. `text_delta` содержит `validated: false`:
 это поток модели для просмотра, его нельзя использовать как реквизиты для регистрации.
 После reconnect клиент читает snapshot и продолжает с cursor. Итог получает отдельно.
+
+## 3 шага по умолчанию
+
+1. `POST /api/v1/jobs`, multipart `files` (повторяется для каждого файла), необязательный
+   `organization_hint`; сохранить `job_id` из ответа `202`.
+2. `GET /api/v1/jobs/{job_id}?include_pages=false` до `completed` или
+   `completed_with_warnings`; `failed` содержит диагностический код. Долгий анализ
+   выполняется worker, HTTP-запрос не удерживается.
+3. `GET /api/v1/jobs/{job_id}/result`, затем скачать реальные PDF по
+   `files[].documents[].attachment_file.file_url`. Проверить SHA-256/размер из status.
+
+Старые клиенты не передают новые flags и продолжают работать без подтверждения.
+Они не обязаны использовать редактор, SSE, preview или ручные endpoints.
+
+## Необязательные режимы и редактор
+
+Оба флага передаются полями multipart `/jobs` и `/uploads`:
+
+| `auto_split` | `skip_segmentation` | Поведение |
+|---|---|---|
+| `true` (default) | `false` (default) | VLM определяет состав, затем извлекает факты |
+| `false` | `false` | VLM предлагает состав; `awaiting_confirmation`, затем confirm |
+| `false` | `true` | Один файл — одна группа; прямой `/jobs` не требует confirm |
+| `true` | `true` | `422 invalid_segmentation_mode` |
+
+| Запрос | Контракт |
+|---|---|
+| `GET /jobs/{id}/segmentation` | Flags, source, `plan_revision`, proposal/draft/approved, `can_confirm` |
+| `PATCH /jobs/{id}/mode` | JSON `{expected_revision, auto_split, skip_segmentation}` |
+| `PUT /jobs/{id}/segmentation` | JSON `{expected_revision, documents, excluded_pages, action?}` |
+| `POST /jobs/{id}/segmentation/confirm` | JSON `{expected_revision}`, `202` со status |
+| `GET /jobs/{id}/pages?offset=0&limit=60` | Порция страниц, limit 1..120, ready/pending и URLs |
+| `GET /jobs/{id}/pages/{file_id}/{page}/thumbnail` | Небольшой PNG, тот же owner/signed access |
+
+В таблице общий prefix `/api/v1`. Каждая страница адресуется парой
+`(file_id, page_number)`, номер — физический внутри исходника. `global_position`
+в page API — отдельный сквозной индекс от 1, `source_order` — порядок источника от 0.
+`pending` не имеет фиктивной ссылки; `ready` содержит preview/thumbnail URL.
+
+Пример точного тела сохранения (свои `file_id` брать из status, revision из segmentation):
+
+```json
+{
+  "expected_revision": 3,
+  "documents": [
+    {"client_id": "document-a", "pages": [{"file_id": "source-a", "page_number": 1}]},
+    {"client_id": "document-b", "pages": [{"file_id": "source-a", "page_number": 3}]}
+  ],
+  "excluded_pages": [{"file_id": "source-a", "page_number": 2, "reason": "Явно исключено сотрудником"}],
+  "action": "split"
+}
+```
+
+Ответ `200` — актуальный segmentation snapshot: `auto_split=false`,
+`skip_segmentation=true`, `segmentation_source=manual` (или `manual_override`),
+новая `plan_revision`, `draft_plan`, `proposed_plan`, `approved_plan`, `initial_plan`,
+`locked`, `preview_complete`, `can_confirm`, счётчики назначений. Первая ручная правка
+сохраняет **и состав, и режим одной транзакцией**. Proposal не изменяется.
+`action`: `edit`, `split`, `merge`, `boundary_move`, `exclude`, `restore`, `undo`, `reset`, `manual`.
+Undo/Reset отправляют полное восстановленное назначение с текущей revision.
+
+Confirm: `POST .../segmentation/confirm` с `{"expected_revision":4}` возвращает
+`202` с queued status. Повтор той же утверждённой revision не ставит второе задание.
+Несохранённые/неполные страницы, неизвестные адреса, пересечения, перестановка и
+отсутствие регистрационных групп отклоняются. Два конкурентных изменения одной
+revision: только одно успешно, второе `409 plan_version_conflict`.
+После lock изменение режима/состава даёт `409 plan_locked`.
+
+`/uploads` сразу ставит `work_kind=prepare`: снаружи `uploaded`,
+`stage=preparing_preview`, затем `preview_ready`. Первые PNG доступны прогрессивно.
+Start во время подготовки фиксирует намерение запустить анализ, подготовка не повторяется.
+Review освобождает worker/lease; после confirm используются OCR checkpoints и исходное
+предложение. Для ручных групп VLM извлекает внутренние приложения, сохраняя их страницы.
+`excluded_pages` присутствует только в plan/status-счётчиках/manifest; JSON 1.0 неизменен.
+
+UI использует `include_pages=false` для status/snapshot/SSE; изображения получает через
+пагинацию. Legacy default `include_pages=true` сохраняется. Новые события:
+`source_discovered`, `page_ready`, `preview_ready`, `mode_changed`, `draft_saved`,
+`plan_approved`, `plan_locked`; пути файловой системы в SSE не выдаются.
+
+Ожидание ручного решения: 3600 секунд после готовности всех превью; правки не продлевают
+TTL. Отдельные конечные бюджеты действуют для очереди, превью и анализа. После завершения
+начинается новый час хранения. До confirm `/result` отвечает `409`, после TTL — `410`.
+Пределы источника, комплекта и пачки перечислены в Settings/`.env.example`; превышение
+byte-бюджета — `413 upload_file_limit`/`upload_batch_limit`, страниц — `page_limit`.
+Большой body допускается только на multipart upload endpoints; JSON/mode/plan/prompts
+имеют отдельный `HTTP_JSON_MAX_MB=4`, включая chunked запросы.
 
 Файлы содержат `Content-Type`, `Content-Length`, `Content-Disposition`, `ETag`,
 `X-Content-SHA256`, для завершённых заданий — `X-Expires-At`.

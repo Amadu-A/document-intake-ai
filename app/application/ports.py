@@ -5,8 +5,9 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Protocol
 
+from app.domain.boundaries import ManualPlan
 from app.domain.jobs import Job, Source
-from app.domain.segmentation import PageRef
+from app.domain.segmentation import PageRef, Plan
 
 Emit = Callable[[str, dict], Awaitable[None]]
 
@@ -17,6 +18,7 @@ class AnalysisSettings(Protocol):
     model_attempts: int
     vlm_window_pages: int
     vlm_overlap_pages: int
+    vlm_reconciliation_windows: int
 
 
 class DownloadSigner(Protocol):
@@ -94,6 +96,38 @@ class JobRepository(Protocol):
 
     async def events(self, job_id: str, after: int) -> list[dict]:
         """Читает монотонный журнал для SSE replay."""
+        ...
+
+    async def complete_preview(self, job_id: str, fence: int, manifest: dict) -> Job:
+        """Публикует готовность preview и отделяет ожидание сотрудника от рабочего lease."""
+        ...
+
+    async def propose(self, job_id: str, fence: int, plan: Plan) -> Job:
+        """Сохраняет предложение VLM, не перезаписывая ручное решение нового поколения."""
+        ...
+
+    async def lock_plan(self, job_id: str, fence: int) -> Job:
+        """Фиксирует неизменяемое множество страниц непосредственно перед извлечением."""
+        ...
+
+
+class BoundaryRepository(Protocol):
+    """Короткие транзакционные команды ручной разметки и подтверждения."""
+
+    async def change_mode(
+        self, job_id: str, owner: str, revision: int, auto_split: bool, skip_segmentation: bool
+    ) -> Job:
+        """Атомарно меняет режим с owner/revision/fence проверкой."""
+        ...
+
+    async def save_draft(
+        self, job_id: str, owner: str, revision: int, plan: ManualPlan, action: str
+    ) -> Job:
+        """Сохраняет черновик и manual source одной операцией."""
+        ...
+
+    async def confirm(self, job_id: str, owner: str, revision: int, prompts: dict[str, str]) -> Job:
+        """Идемпотентно утверждает ревизию и создаёт outbox продолжения."""
         ...
 
 

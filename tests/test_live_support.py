@@ -148,9 +148,9 @@ async def test_runner_matches_reversed_artifacts_by_document_id(
     container.vision.answers.extend([two_documents, first, second])
     original = container.exports.status
 
-    def reversed_artifacts(job):
+    def reversed_artifacts(job, include_pages=True):
         """Меняет только порядок публичного массива, сохраняя реальные metadata и файлы."""
-        status = original(job)
+        status = original(job, include_pages)
         status["artifacts"].reverse()
         return status
 

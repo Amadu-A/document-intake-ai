@@ -1,0 +1,47 @@
+/* app/web/static/css/blocks/boundaries.css */
+/* Горизонтальная виртуальная лента и доступные переключатели сохраняют палитру и три колонки. */
+.mode { display: flex; gap: 8px; margin-top: 7px; }
+.mode__option { flex: 1; position: relative; display: flex; gap: 9px; align-items: center; padding: 10px; background: var(--color-panel); border: 1px solid var(--color-line); border-radius: 10px; cursor: pointer; font-size: 11px; }
+.mode__option small { display: block; margin-top: 4px; color: var(--color-muted); font-size: 10px; }
+.mode__switch { appearance: none; position: relative; width: 34px; height: 20px; background: #ccd7e7; border-radius: 20px; flex: 0 0 34px; cursor: pointer; transition: background .15s; }
+.mode__switch::before { content: ""; position: absolute; width: 14px; height: 14px; top: 3px; left: 3px; border-radius: 50%; background: white; box-shadow: 0 1px 3px #203b5e33; transition: transform .15s; }
+.mode__switch:checked { background: var(--color-blue); }
+.mode__switch:checked::before { transform: translateX(14px); }
+.mode__switch:focus-visible { outline: 3px solid var(--color-teal); outline-offset: 3px; }
+.boundary__error { color: #a23930; font-size: 12px; }
+.mode__option:has(:disabled) { opacity: .55; cursor: not-allowed; }
+.mode__hint { color: var(--color-muted); font-size: 10px; line-height: 1.5; }
+.boundary { margin: 0 0 16px; padding: 16px; background: var(--color-panel); border: 1px solid var(--color-line); border-radius: var(--radius); box-shadow: var(--shadow); }
+.boundary__heading, .boundary__footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.boundary__heading h2 { font-size: 14px; margin: 0; }
+.boundary__hint { margin: 6px 0; font-size: 10px; color: var(--color-muted); line-height: 1.5; }
+.boundary__tools { display: flex; gap: 5px; flex-wrap: wrap; }
+.boundary__tools .button { font-size: 10px; padding: 6px 8px; }
+.boundary__navigation { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 10px 0; font-size: 11px; color: var(--color-muted); }
+.boundary__source, .boundary__jump { padding: 5px; border: 1px solid var(--color-line); border-radius: 6px; color: var(--color-text); background: white; max-width: 240px; }
+.boundary__jump { width: 70px; }
+.boundary__scroll { overflow-x: auto; padding: 5px 3px 12px; min-height: 165px; }
+.boundary__track { display: flex; gap: 8px; min-width: max-content; align-items: stretch; }
+.boundary__spacer { flex-shrink: 0; }
+.boundary__page { --range-color: #9daec4; position: relative; flex: 0 0 100px; width: 100px; border: 1px solid var(--color-line); border-top: 5px solid var(--range-color); border-radius: 10px; background: #f7faff; }
+.boundary__page--tone-0 { --range-color: #4b83f7; }
+.boundary__page--tone-1 { --range-color: #009f84; }
+.boundary__page--tone-2 { --range-color: #9670cc; }
+.boundary__page--tone-3 { --range-color: #d69836; }
+.boundary__page--tone-4 { --range-color: #30a7bd; }
+.boundary__page--tone-5 { --range-color: #df7785; }
+.boundary__page--excluded { border-style: dashed; background: #f4f5f8; }
+.boundary__page--selected { outline: 2px solid var(--color-blue); outline-offset: 2px; }
+.boundary__select { border: 0; background: none; width: 100%; padding: 9px 5px 6px; color: var(--color-text); font-family: inherit; }
+.boundary__image { display: block; width: 70px; height: 92px; object-fit: contain; background: white; margin: 0 auto 5px; box-shadow: 0 2px 7px #203b5e1f; }
+.boundary__pending { display: grid; place-items: center; height: 92px; font-size: 10px; color: var(--color-muted); }
+.boundary__number, .boundary__role { display: block; font-size: 10px; text-align: center; }
+.boundary__role { font-size: 9px; color: var(--color-muted); margin-top: 3px; }
+.boundary__handle { position: absolute; z-index: 2; top: 45px; right: -13px; width: 26px; min-height: 42px; padding: 0; border: 2px solid white; border-radius: 8px; background: var(--color-blue); color: white; box-shadow: 0 2px 5px #32548355; cursor: ew-resize; touch-action: none; }
+.boundary__handle--left { left: -13px; right: auto; }
+.boundary__handle:focus-visible { outline: 3px solid var(--color-teal); outline-offset: 2px; }
+.boundary__footer { font-size: 10px; color: var(--color-muted); padding-top: 8px; }
+.boundary__save { font-size: 11px; color: var(--color-teal); margin: 8px 0 0; }
+.boundary__save--pending { color: #a16a1e; }
+@media (max-width: 750px) { .mode { flex-direction: column; } .boundary { padding: 12px; } .boundary__heading { align-items: flex-start; } .boundary__source { max-width: 180px; } }
+@media (pointer: coarse) { .boundary__handle { width: 40px; min-height: 48px; right: -18px; } .boundary__handle--left { left: -18px; right: auto; } }

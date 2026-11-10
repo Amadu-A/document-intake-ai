@@ -9,6 +9,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.domain.errors import IntakeError, LeaseLost
 from app.domain.jobs import TERMINAL, Job, utcnow
+from app.infrastructure.boundary_transactions import BoundaryTransactions
 
 
 class Base(DeclarativeBase):
@@ -65,7 +66,7 @@ class LimitRow(Base):
     count: Mapped[int] = mapped_column(Integer)
 
 
-class Database:
+class Database(BoundaryTransactions):
     """Реализует порты заданий/промптов и технические операции фоновых процессов."""
 
     def __init__(self, engine: AsyncEngine, settings) -> None:
@@ -78,9 +79,15 @@ class Database:
         """Сериализует admission/idempotency между API-процессами PostgreSQL."""
         if self.engine.dialect.name == "postgresql":
             await session.execute(text("SELECT pg_advisory_xact_lock(842693015)"))
+        elif self.engine.dialect.name == "sqlite" and not session.info.get("writer_lock"):
+            # SQLite не имеет SELECT FOR UPDATE; короткая write-транзакция нужна dev/tests.
+            await session.execute(text("BEGIN IMMEDIATE"))
+            session.info["writer_lock"] = True
 
     async def _locked(self, session, job_id: str) -> tuple[JobRow, Job]:
         """Берёт короткую блокировку агрегата; VLM/файловое I/O под ней запрещено."""
+        if self.engine.dialect.name == "sqlite":
+            await self._serialize_admission(session)
         row = await session.scalar(select(JobRow).where(JobRow.id == job_id).with_for_update())
         if row is None:
             raise IntakeError("job_not_found", "Задание не найдено", 404)
@@ -104,17 +111,56 @@ class Database:
         row.lease_until = None
         self._write(session, row, job, "terminal", {"status": status, "error": error})
 
+    def _assert_worker(self, row: JobRow, job: Job, fence: int) -> None:
+        """Проверяет активное поколение как анализа, так и отдельной подготовки страниц."""
+        active = job.status == "running" or (
+            job.status == "uploaded" and job.work_kind == "prepare"
+        )
+        if not active or job.fence != fence or not self._lease_alive(row):
+            raise LeaseLost()
+        if job.deadline_at and job.deadline_at <= utcnow():
+            raise LeaseLost()
+
+    async def _drop_signal(self, session, job_id: str) -> None:
+        """Удаляет только транзакционный сигнал текущего задания."""
+        await session.execute(delete(SignalRow).where(SignalRow.job_id == job_id))
+
+    async def _queue_work(self, session, row: JobRow, job: Job) -> None:
+        """Планирует новый этап с отдельным бюджетом очереди, не создавая дубликат outbox."""
+        queued = await session.scalar(
+            select(func.count())
+            .select_from(JobRow)
+            .where(JobRow.status.in_(("queued", "running")), JobRow.id != job.id)
+        )
+        if queued >= self.settings.queue_max_depth:
+            raise IntakeError("queue_full", "Очередь заполнена", 429)
+        job.status, job.work_kind, job.stage = "queued", "analyze", "queued"
+        job.attempt = 0
+        job.expires_at = None
+        job.queue_deadline_at = utcnow() + timedelta(seconds=self.settings.queue_timeout_seconds)
+        job.deadline_at = job.queue_deadline_at
+        signal = await session.get(SignalRow, job.id)
+        if signal:
+            signal.next_at = utcnow()
+        else:
+            session.add(SignalRow(job_id=job.id, next_at=utcnow()))
+
     async def _admit(self, session, owner: str) -> None:
         """Проверяет глобальную глубину и число активных заданий одного owner."""
         active = (
-            select(func.count()).select_from(JobRow).where(JobRow.status.in_(("queued", "running")))
+            select(func.count())
+            .select_from(JobRow)
+            .where(JobRow.status.in_(("uploaded", "queued", "running", "awaiting_confirmation")))
         )
         if await session.scalar(active) >= self.settings.queue_max_depth:
             raise IntakeError("queue_full", "Очередь заполнена; повторите позже", 429)
         owned = (
             select(func.count())
             .select_from(JobRow)
-            .where(JobRow.owner == owner, JobRow.status.in_(("uploaded", "queued", "running")))
+            .where(
+                JobRow.owner == owner,
+                JobRow.status.in_(("uploaded", "queued", "running", "awaiting_confirmation")),
+            )
         )
         if await session.scalar(owned) >= self.settings.max_owner_active_jobs:
             raise IntakeError("queue_full", "Достигнут лимит активных заданий сессии", 429)
@@ -136,8 +182,11 @@ class Database:
                         )
                     return existing, False
             await self._admit(session, job.owner)
-            if job.status == "queued":
-                job.deadline_at = utcnow() + timedelta(seconds=self.settings.job_timeout_seconds)
+            if job.status == "queued" or job.work_kind == "prepare":
+                job.queue_deadline_at = utcnow() + timedelta(
+                    seconds=self.settings.queue_timeout_seconds
+                )
+                job.deadline_at = job.queue_deadline_at
             row = JobRow(
                 id=job.id,
                 owner=job.owner,
@@ -148,7 +197,7 @@ class Database:
             )
             session.add(row)
             self._write(session, row, job, "created", {"status": job.status})
-            if job.status == "queued":
+            if job.status == "queued" or job.work_kind == "prepare":
                 session.add(SignalRow(job_id=job.id, next_at=utcnow()))
             return job, True
 
@@ -166,21 +215,30 @@ class Database:
             await self._serialize_admission(session)
             row, job = await self._locked(session, job_id)
             job.authorize(owner)
+            if (
+                job.segmentation_source in {"manual", "manual_override"}
+                and job.approved_plan is None
+                and job.status in {"uploaded", "awaiting_confirmation"}
+            ):
+                raise IntakeError(
+                    "segmentation_confirmation_required", "Подтвердите сохранённую разметку", 409
+                )
             if job.status != "uploaded":
+                if job.status == "awaiting_confirmation":
+                    raise IntakeError(
+                        "segmentation_confirmation_required",
+                        "Подтвердите текущую ревизию плана",
+                        409,
+                    )
                 return job
-            queued = await session.scalar(
-                select(func.count())
-                .select_from(JobRow)
-                .where(JobRow.status.in_(("queued", "running")))
-            )
-            if queued >= self.settings.queue_max_depth:
-                raise IntakeError("queue_full", "Очередь заполнена", 429)
-            job.prompts = dict(prompts)
-            job.status = "queued"
-            job.expires_at = None
-            job.deadline_at = utcnow() + timedelta(seconds=self.settings.job_timeout_seconds)
+            if not job.prompts:
+                job.prompts = dict(prompts)
+            job.processing_requested = True
+            if job.work_kind == "prepare" and self._lease_alive(row):
+                self._write(session, row, job, "analysis_requested", {"status": job.status})
+                return job
+            await self._queue_work(session, row, job)
             self._write(session, row, job, "queued", {"status": "queued"})
-            session.add(SignalRow(job_id=job_id, next_at=utcnow()))
             return job
 
     async def cancel(self, job_id: str, owner: str) -> Job:
@@ -201,7 +259,11 @@ class Database:
                 row, job = await self._locked(session, job_id)
             except IntakeError:
                 return None
-            if job.status != "queued":
+            if job.status != "queued" and not (
+                job.status == "uploaded" and job.work_kind == "prepare" and not job.preview_complete
+            ):
+                return None
+            if self._lease_alive(row):
                 return None
             if job.deadline_at and job.deadline_at <= utcnow():
                 self._terminal(
@@ -214,7 +276,19 @@ class Database:
                 return None
             job.fence += 1
             job.attempt += 1
-            job.status = "running"
+            if job.work_kind != "prepare":
+                job.status = "running"
+            job.queue_deadline_at = None
+            if not job.preview_complete:
+                job.preview_deadline_at = job.preview_deadline_at or utcnow() + timedelta(
+                    seconds=self.settings.preview_timeout_seconds
+                )
+                job.deadline_at = job.preview_deadline_at
+            else:
+                job.processing_deadline_at = job.processing_deadline_at or utcnow() + timedelta(
+                    seconds=self.settings.job_timeout_seconds
+                )
+                job.deadline_at = job.processing_deadline_at
             row.lease_until = utcnow() + timedelta(seconds=self.settings.worker_lease_seconds)
             self._write(session, row, job, "started", {"attempt": job.attempt, "status": "running"})
             await session.execute(delete(SignalRow).where(SignalRow.job_id == job_id))
@@ -224,9 +298,9 @@ class Database:
         """Продлевает lease только живого поколения в пределах общего deadline."""
         async with self.sessions.begin() as session:
             row, job = await self._locked(session, job_id)
-            if job.status != "running" or job.fence != fence or not self._lease_alive(row):
-                return False
-            if job.deadline_at and job.deadline_at <= utcnow():
+            try:
+                self._assert_worker(row, job, fence)
+            except LeaseLost:
                 return False
             row.lease_until = utcnow() + timedelta(seconds=self.settings.worker_lease_seconds)
             return True
@@ -235,16 +309,31 @@ class Database:
         """Сохраняет этап/рендеры/событие; устаревшему worker запись запрещена."""
         async with self.sessions.begin() as session:
             row, job = await self._locked(session, job_id)
-            if job.status != "running" or job.fence != fence or not self._lease_alive(row):
-                raise LeaseLost()
-            if job.deadline_at and job.deadline_at <= utcnow():
-                raise LeaseLost()
+            self._assert_worker(row, job, fence)
             if kind == "stage":
                 job.stage, job.progress = data["stage"], data["progress"]
             elif kind == "normalized":
                 job.manifest = data
                 for source in job.sources:
                     source.page_count = data["source_counts"][source.file_id]
+            elif kind == "source_discovered":
+                counts = {
+                    **job.manifest.get("source_counts", {}),
+                    data["file_id"]: data["page_count"],
+                }
+                job.manifest = {**job.manifest, "source_counts": counts}
+                for source in job.sources:
+                    source.page_count = counts.get(source.file_id, source.page_count)
+                job.plan_revision += 1
+                if job.draft_plan is None or job.segmentation_source == "source_files":
+                    from app.domain.boundaries import source_file_plan
+
+                    job.draft_plan = source_file_plan(job.page_refs())
+            elif kind == "page_ready":
+                pages = job.manifest.get("pages", [])
+                indexed = {(p["file_id"], p["page_number"]): p for p in pages}
+                indexed.update({(p["file_id"], p["page_number"]): p for p in data["pages"]})
+                job.manifest = {**job.manifest, "pages": list(indexed.values())}
             elif kind == "segmentation":
                 job.manifest = {**job.manifest, "plan": data}
             self._write(session, row, job, kind, data)
@@ -261,8 +350,7 @@ class Database:
         """Одной транзакцией публикует проверенный результат и терминальное событие."""
         async with self.sessions.begin() as session:
             row, job = await self._locked(session, job_id)
-            if job.status != "running" or job.fence != fence or not self._lease_alive(row):
-                raise LeaseLost()
+            self._assert_worker(row, job, fence)
             job.result = result
             job.manifest = manifest or job.manifest
             job.progress = 100 if result is not None else job.progress
@@ -336,20 +424,33 @@ class Database:
         """Восстанавливает зависшие lease, ограничивает retry и возвращает истёкшие job ids."""
         expired = []
         async with self.sessions.begin() as session:
+            if self.engine.dialect.name == "sqlite":
+                await self._serialize_admission(session)
             rows = await session.scalars(
                 select(JobRow)
-                .where(JobRow.status.in_(("running", "queued", "uploaded", *TERMINAL)))
+                .where(
+                    JobRow.status.in_(
+                        ("running", "queued", "uploaded", "awaiting_confirmation", *TERMINAL)
+                    )
+                )
                 .with_for_update(skip_locked=True)
             )
             now = utcnow()
             for row in rows:
                 job = Job.model_validate(row.data)
-                if job.status in {"running", "queued"}:
+                preparing = (
+                    job.status == "uploaded"
+                    and job.work_kind == "prepare"
+                    and not job.preview_complete
+                )
+                if job.status in {"running", "queued"} or preparing:
                     deadline = job.deadline_at and job.deadline_at <= now
                     lease = row.lease_until
                     if lease and lease.tzinfo is None:
                         lease = lease.replace(tzinfo=now.tzinfo)
-                    stale = job.status == "running" and (lease is None or lease <= now)
+                    stale = (job.status == "running" and (lease is None or lease <= now)) or (
+                        preparing and lease is not None and lease <= now
+                    )
                     if deadline or (stale and job.attempt >= self.settings.worker_max_attempts):
                         job.fence += 1
                         self._terminal(
@@ -365,7 +466,7 @@ class Database:
                         await session.execute(delete(SignalRow).where(SignalRow.job_id == job.id))
                     elif stale:
                         job.fence += 1
-                        job.status = "queued"
+                        job.status = "uploaded" if job.work_kind == "prepare" else "queued"
                         row.lease_until = None
                         self._write(session, row, job, "retry", {"attempt": job.attempt})
                         if not await session.get(SignalRow, job.id):
@@ -386,6 +487,11 @@ class Database:
                 not job.expires_at
                 or job.expires_at > utcnow()
                 or job.status in {"running", "queued"}
+                or (
+                    job.status == "uploaded"
+                    and job.work_kind == "prepare"
+                    and not job.preview_complete
+                )
             ):
                 return
             for table in (EventRow, SignalRow):

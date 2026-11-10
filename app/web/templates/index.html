@@ -7,13 +7,19 @@
     <h1 class="upload__title" id="upload-title">ЗАГРУЖЕННЫЕ ДОКУМЕНТЫ</h1>
     <label class="upload__label" for="files">＋ Выберите файлы или перетащите сюда</label>
     <input class="upload__file" id="files" type="file" multiple data-files accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,.tif,.tiff">
-    <p class="upload__hint">PDF, DOC, DOCX, TXT, JPG, PNG, TIFF · до {{ max_files }} файлов / {{ max_mb }} МБ</p>
+    <p class="upload__hint">PDF, DOC, DOCX, TXT, JPG, PNG, TIFF · файл до {{ max_file_mb }} МиБ / {{ max_file_pages }} стр. · пакет до {{ max_files }} файлов / {{ max_mb }} МиБ / {{ max_pages }} стр.</p>
     <ul class="upload__queue" data-file-list></ul>
   </div>
-  <div class="upload__mode"><strong>РЕЖИМ ОБРАБОТКИ</strong><p>Автоматическое разделение и извлечение</p><small>Приложения остаются в составе регистрационного документа</small></div>
+  <div class="upload__mode"><strong>РЕЖИМ РАЗДЕЛЕНИЯ</strong>
+    <div class="mode">
+      <label class="mode__option"><input class="mode__switch" type="checkbox" role="switch" data-auto-split checked><span><strong>Авторазделение</strong><small>VLM решает самостоятельно</small></span></label>
+      <label class="mode__option"><input class="mode__switch" type="checkbox" role="switch" data-skip-segmentation><span><strong>Пропустить определение границ</strong><small>Каждый файл — готовый документ</small></span></label>
+    </div><p class="mode__hint" data-mode-hint>Автоматическое разделение и извлечение без подтверждения</p>
+  </div>
   <dl class="metrics"><div class="metrics__item"><dt>Файлов</dt><dd data-count-files>0</dd></div><div class="metrics__item"><dt>Документов</dt><dd data-count-documents>—</dd></div><div class="metrics__item metrics__item--teal"><dt>Приложений</dt><dd data-count-attachments>—</dd></div></dl>
 </section>
 <div class="notice" role="status" aria-live="polite" data-notice>Загрузите документы. Сервис самостоятельно определит состав пакета и подготовит PDF для каждой регистрации.</div>
+{% include 'components/boundaries.html' %}
 <div class="workspace">
   <section class="panel viewer" aria-labelledby="viewer-title">
     <div class="panel__heading"><h2 id="viewer-title">▤ Просмотр документа</h2><a class="badge" data-original hidden>Исходный файл ↓</a></div>

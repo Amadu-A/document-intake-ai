@@ -2,7 +2,9 @@
 """HTTP-контракты адаптеров проверяются локальными ответами; это не реальные shared прогоны."""
 
 import asyncio
+import io
 import json
+import random
 from email.parser import BytesParser
 from email.policy import default
 from pathlib import Path
@@ -10,6 +12,7 @@ from pathlib import Path
 import httpx
 import pymupdf
 import pytest
+from PIL import Image
 from pydantic import SecretStr
 
 from app.domain.errors import IntakeError
@@ -149,6 +152,110 @@ async def test_docling_refuses_partial_success(settings, tmp_path):
         with pytest.raises(IntakeError) as error:
             await DoclingOCR(settings, client).recognize([page_fixture(tmp_path)], emit)
     assert error.value.code == "docling_incomplete"
+
+
+async def test_docling_checkpoint_reuses_success_and_invalidates_changed_source(settings, tmp_path):
+    """Новый экземпляр адаптера использует OCR checkpoint; смена fingerprint требует OCR снова."""
+    settings.docling_api_key = SecretStr("synthetic-docling-key")
+    page = page_fixture(tmp_path)
+    page["source_sha256"] = "a" * 64
+    calls = []
+
+    async def transport(request):
+        """Возвращает реальный формат Docling, а не заглушку внутри production-конвейера."""
+        calls.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "status": "success",
+                "document": {
+                    "json_content": {
+                        "pages": {"1": {}},
+                        "texts": [{"text": "SYNTHETIC CACHED OCR", "prov": [{"page_no": 1}]}],
+                    }
+                },
+            },
+        )
+
+    async def emit(kind, data):
+        """Не публикует синтетический OCR в обычные логи."""
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        first = await DoclingOCR(settings, client).recognize([page], emit)
+        second = await DoclingOCR(settings, client).recognize([page], emit)
+        assert len(calls) == 1 and first == second
+        changed = {**page, "source_sha256": "b" * 64}
+        await DoclingOCR(settings, client).recognize([changed], emit)
+        assert len(calls) == 2
+        Path(page["preview"]).with_suffix(".ocr.json").write_text("broken", "utf-8")
+        await DoclingOCR(settings, client).recognize([changed], emit)
+        assert len(calls) == 3
+
+
+async def test_large_pdf_window_is_built_in_isolated_process(settings, tmp_path, monkeypatch):
+    """Большой исходник обрабатывает child, а в parent передаётся небольшое OCR-окно."""
+    settings.docling_api_key = SecretStr("synthetic-docling-key")
+    settings.docling_max_request_mb = 1
+    page = page_fixture(tmp_path)
+
+    def pad_source():
+        """Создаёт большой, но валидный PDF без большого буфера production-клиента."""
+        with Path(page["pdf"]).open("ab") as stream:
+            stream.write(b" " * (2 * 1024 * 1024))
+
+    await asyncio.to_thread(pad_source)
+
+    def forbidden_parent_assembly(pages):
+        """Прямая in-process сборка большого источника считается ошибкой теста."""
+        raise AssertionError("Large source assembled in parent")
+
+    monkeypatch.setattr("app.infrastructure.docling.window_pdf", forbidden_parent_assembly)
+
+    async def transport(request):
+        """Проверяет настоящий PDF дочернего процесса и ограниченный размер перед HTTP."""
+        fields = multipart_fields(request)
+        assert len(fields["files"][0]) < 1024 * 1024
+        with pymupdf.open(stream=fields["files"][0], filetype="pdf") as pdf:
+            assert len(pdf) == 1
+        return httpx.Response(
+            200, json={"status": "success", "document": {"json_content": {"pages": {"1": {}}}}}
+        )
+
+    async def emit(kind, data):
+        """Не публикует private payload в тестовом журнале."""
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        result = await DoclingOCR(settings, client).recognize([page], emit)
+    assert len(result) == 1
+    assert not list(tmp_path.glob(".ocr-window-*"))
+
+
+async def test_isolated_single_page_limit_cleans_temporary_pdf(settings, tmp_path):
+    """Слишком тяжёлая страница отклоняется до HTTP, без чтения полного PDF в parent."""
+    settings.docling_api_key = SecretStr("synthetic-docling-key")
+    settings.docling_max_request_mb = 1
+    page = page_fixture(tmp_path)
+    noise = random.Random(42).randbytes(800 * 800 * 3)
+    buffer = io.BytesIO()
+    with Image.frombytes("RGB", (800, 800), noise) as image:
+        image.save(buffer, format="PNG", compress_level=0)
+    with pymupdf.open() as pdf:
+        sheet = pdf.new_page()
+        sheet.insert_image(sheet.rect, stream=buffer.getvalue())
+        pdf.save(page["pdf"])
+
+    async def transport(request):
+        """Превышение размера должно быть обнаружено до обращения к Docling."""
+        raise AssertionError("Oversized OCR request")
+
+    async def emit(kind, data):
+        """Не публикует synthetic payload в обычные логи."""
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        with pytest.raises(IntakeError) as failure:
+            await DoclingOCR(settings, client).recognize([page], emit)
+    assert failure.value.code == "docling_request_limit"
+    assert not list(tmp_path.glob(".ocr-window-*"))
 
 
 async def test_docling_uses_configured_ocr_preset_and_languages(settings, tmp_path):
