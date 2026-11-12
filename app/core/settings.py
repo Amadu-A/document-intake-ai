@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     docling_timeout_seconds: int = Field(180, ge=1, le=600)
     docling_window_pages: int = Field(20, ge=1, le=50)
     docling_max_request_mb: int = Field(45, ge=1, le=50)
+    docling_async: bool = True
+    docling_task_timeout_seconds: int = Field(600, ge=30, le=1800)
+    docling_poll_interval_seconds: float = Field(5, ge=0.1, le=30)
+    docling_max_attempts: int = Field(5, ge=1, le=8)
+    docling_retry_max_seconds: int = Field(60, ge=1, le=300)
+    docling_request_interval_seconds: float = Field(1, ge=0, le=60)
     shared_vlm_base_url: str = "http://shared-vlm:8000/v1"
     shared_vlm_model: str = "shared-vlm"
     vlm_enable_thinking: bool = False
@@ -64,6 +70,7 @@ class Settings(BaseSettings):
     vlm_window_pages: int = Field(8, ge=2, le=32)
     vlm_overlap_pages: int = Field(2, ge=1)
     vlm_reconciliation_windows: int = Field(4, ge=2, le=8)
+    vlm_segmentation_timeout_seconds: int = Field(900, ge=10, le=3600)
     vlm_max_tokens: int = Field(16000, ge=1024, le=32768)
     model_attempts: int = Field(3, ge=1, le=5)
     worker_concurrency: int = Field(1, ge=1, le=4)
@@ -90,6 +97,8 @@ class Settings(BaseSettings):
     render_max_side: int = Field(1600, ge=400, le=2400)
     conversion_timeout_seconds: int = Field(900, ge=5, le=7200)
     rate_limit_per_minute: int = Field(120, ge=5)
+    read_rate_limit_per_minute: int = Field(600, ge=5)
+    preview_rate_limit_per_minute: int = Field(2400, ge=5)
     max_owner_active_jobs: int = Field(4, ge=1, le=100)
     health_cache_seconds: int = Field(60, ge=5, le=300)
 

@@ -1,12 +1,14 @@
 // app/web/static/js/features/boundaries.js
 /** Редактор с серверным ACK/revision, ограниченным DOM и ленивой загрузкой превью. */
 import { api, notice } from "../api.js";
+import { previewURL, clearPreviews } from "../previews.js";
 import { pageKey, sourceLabel, groupFor, splitRange, mergeRanges, excludePages, createRange, moveBoundary, coversPages } from "./boundary_state.js";
 
 export function createBoundaryEditor(viewer, changed) {
   /** Хранит метаданные; изображения и URL запрашивает порциями по 60 страниц. */
   let snapshot = null, saved = null, savedStatus = null, plan = null, physical = [], filtered = [], selected = new Set(), anchor = 0;
   let busy = false, history = [], generation = 0, editing = null, lastJob = null;
+  let activePageKey = null;
   const cache = new Map(), requests = new Map();
   const finalRoles = new Map();
   const scroll = document.querySelector("[data-boundary-scroll]"), track = document.querySelector("[data-boundary-track]");
@@ -37,15 +39,17 @@ export function createBoundaryEditor(viewer, changed) {
     for (const doc of proposed || []) for (const attachment of doc.attachments) if (attachment.pages.some(p => pageKey(p) === pageKey(ref))) return `Приложение: ${attachment.kind} · документ ${doc.document_index}`;
     return group ? `Документ ${index + 1} · ${sourceLabel(saved?.segmentation_source)}` : "Вне диапазона · оригинал сохранён";
   }
-  function selection(ref, extend = false) {
-    /** Общий физический выбор ленты и основного viewer. */
+  function selection(ref, extend = false, toggle = false) {
+    /** Shift выбирает интервал, Ctrl/Cmd — отдельные несмежные листы без захвата чужих. */
     const position = physical.findIndex(p => pageKey(p) === pageKey(ref));
-    if (!extend) { selected = new Set([pageKey(ref)]); anchor = position; }
+    activePageKey = pageKey(ref);
+    if (toggle) { const key = pageKey(ref); if (selected.has(key)) selected.delete(key); else selected.add(key); anchor = position; }
+    else if (!extend) { selected = new Set([pageKey(ref)]); anchor = position; }
     else for (const p of physical.slice(Math.min(anchor, position), Math.max(anchor, position) + 1)) selected.add(pageKey(p));
     document.querySelector("[data-page-jump]").value = position + 1;
     document.querySelector("[data-boundary-selection]").textContent = `Выбрано страниц: ${selected.size}`; render();
   }
-  viewer.configure(metadata, ref => { if (!selected.has(pageKey(ref))) selection(ref); }, description);
+  viewer.configure(metadata, ref => { if (activePageKey !== pageKey(ref) && !selected.has(pageKey(ref))) selection(ref); activePageKey = pageKey(ref); }, description);
   function controls() {
     /** Подтверждение доступно для полностью сохранённого и покрытого плана. */
     const locked = !snapshot || snapshot.plan_locked || ["failed", "cancelled", "completed", "completed_with_warnings", "expired"].includes(snapshot.status) || (snapshot.expires_at && Date.parse(snapshot.expires_at) <= Date.now());
@@ -75,10 +79,12 @@ export function createBoundaryEditor(viewer, changed) {
       const pending = document.createElement("span"); pending.className = "boundary__pending"; pending.textContent = "Готовим превью…";
       const number = document.createElement("span"); number.className = "boundary__number"; number.textContent = `Стр. ${global + 1} · исходная ${ref.page_number}`;
       const title = document.createElement("span"); title.className = "boundary__role"; title.textContent = group ? `Документ ${groupIndex + 1}` : "Вне диапазона";
-      button.append(pending, number, title); button.addEventListener("click", e => { selection(ref, e.shiftKey); viewer.select(ref); }); card.append(button);
-      metadata(ref).then(meta => {
+      button.append(pending, number, title); button.addEventListener("click", e => { selection(ref, e.shiftKey, e.ctrlKey || e.metaKey); viewer.select(ref); }); card.append(button);
+      metadata(ref).then(async meta => {
         if (generation !== localGeneration || !card.isConnected || !meta?.thumbnail_url) return;
-        const image = document.createElement("img"); image.className = "boundary__image"; image.src = meta.thumbnail_url; image.alt = ""; image.loading = "lazy"; pending.replaceWith(image);
+        const url = await previewURL(meta.thumbnail_url);
+        if (generation !== localGeneration || !card.isConnected) return;
+        const image = document.createElement("img"); image.className = "boundary__image"; image.src = url; image.alt = ""; image.loading = "lazy"; pending.replaceWith(image);
       }).catch(() => {});
       if (group && !saved?.locked) {
         if (pageKey(group.pages[0]) === pageKey(ref)) handle(card, group, "left", global);
@@ -156,7 +162,7 @@ export function createBoundaryEditor(viewer, changed) {
     const chosen = physical.filter(p => selected.has(pageKey(p))), ref = chosen[0] || physical[0], action = button.dataset.boundaryAction;
     try {
       if (action === "manual") await save(plan, "manual");
-      if (action === "split") await save(splitRange(plan, ref), "split");
+      if (action === "split") await save(splitRange(plan, ref, physical), "split");
       if (action === "merge") await save(mergeRanges(plan, ref, physical), "merge");
       if (action === "exclude" && chosen.length && window.confirm(`Исключить ${chosen.length} стр. из регистрационных PDF? Оригиналы и превью сохранятся. Пустота страниц автоматически не определялась.`)) await save(excludePages(plan, chosen), "exclude");
       if (action === "create") await save(createRange(plan, chosen, physical), "restore");
@@ -173,7 +179,7 @@ export function createBoundaryEditor(viewer, changed) {
   scroll.addEventListener("scroll", render, { passive: true }); window.addEventListener("resize", render);
   return {
     flags, pending: () => busy || !!editing,
-    expire() { /** Закрывает локальные действия сразу по TTL, до следующего polling. */ if (snapshot) snapshot.status = "expired"; controls(); },
+    expire() { /** Закрывает локальные действия и RAM-кеш сразу по TTL. */ if (snapshot) snapshot.status = "expired"; clearPreviews(); controls(); },
     result(value) {
       /** Показывает приложения ручных групп только после проверенного извлечения. */
       for (const file of value.files) for (const doc of file.documents) for (const attachment of doc.requisites.attachments) {
@@ -184,7 +190,7 @@ export function createBoundaryEditor(viewer, changed) {
     },
     async update(data) {
       /** Snapshot без тысячи URL; состав запрашивается при смене редакции/состояния. */
-      if (lastJob !== data.job_id) { generation++; lastJob = data.job_id; cache.clear(); finalRoles.clear(); history = []; saved = null; selected.clear(); scroll.scrollLeft = 0; errorLabel.hidden = true; }
+      if (lastJob !== data.job_id) { generation++; lastJob = data.job_id; clearPreviews(); cache.clear(); finalRoles.clear(); history = []; saved = null; selected.clear(); scroll.scrollLeft = 0; errorLabel.hidden = true; }
       snapshot = data;
       physical = data.sources.flatMap(source => Array.from({ length: source.page_count || 0 }, (_, i) => ({ file_id: source.file_id, page_number: i + 1 })));
       if (!saved || saved.plan_revision !== data.plan_revision || saved.locked !== data.plan_locked || saved.preview_complete !== data.preview_complete || savedStatus !== data.status) {

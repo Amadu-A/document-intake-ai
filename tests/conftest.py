@@ -1,4 +1,5 @@
 # tests/conftest.py
+# tests/conftest.py
 """Изолированная SQLite test DB и doubles; live/browser требуют явных флагов."""
 
 from pathlib import Path
@@ -52,6 +53,8 @@ def settings(tmp_path):
         download_secret="d" * 48,
         api_keys={"onec": "e" * 48, "telegram": "f" * 48},
         model_attempts=2,
+        # Старые adapter fixtures проверяют sync-контракт; async имеет отдельные регрессии.
+        docling_async=False,
         rate_limit_per_minute=1000,
     )
 
@@ -62,6 +65,9 @@ async def container(settings):
     # HTTP и тестовая доставка идут параллельно: им нельзя делить одну SQLite connection.
     engine = create_async_engine(f"sqlite+aiosqlite:///{settings.data_dir.parent / 'state.sqlite'}")
     async with engine.begin() as connection:
+        if engine.dialect.name == "sqlite":
+            # SSE/preview читают параллельно writer: rollback journal блокирует его commit.
+            await connection.exec_driver_sql("PRAGMA journal_mode=WAL")
         await connection.run_sync(Base.metadata.create_all)
     database = Database(engine, settings)
     storage = FileStorage(settings)

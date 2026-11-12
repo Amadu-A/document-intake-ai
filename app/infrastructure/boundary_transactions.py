@@ -7,6 +7,7 @@ from app.domain.boundaries import (
     ApprovedPlan,
     ManualPlan,
     draft_from_vlm,
+    single_page_plan,
     source_file_plan,
     validate_assignment,
     validate_mode,
@@ -232,6 +233,32 @@ class BoundaryTransactions:
                     "actor": owner,
                     "at": utcnow().isoformat(),
                 },
+            )
+            return job
+
+    async def fallback_pages(self, job_id: str, fence: int, reason: str) -> Job:
+        """Освобождает worker и предлагает все страницы для проверки, без результата/extraction."""
+        async with self.sessions.begin() as session:
+            row, job = await self._locked(session, job_id)
+            self._assert_worker(row, job, fence)
+            if job.skip_segmentation or job.approved_plan is not None:
+                raise LeaseLost()
+            job.auto_split, job.skip_segmentation = False, True
+            job.segmentation_source = "page_fallback"
+            job.draft_plan = single_page_plan(job.page_refs())
+            job.plan_revision += 1
+            job.processing_requested = False
+            job.status, job.stage = "awaiting_confirmation", "awaiting_confirmation"
+            job.manifest = {**job.manifest, "segmentation_fallback": {"code": reason}}
+            row.lease_until = None
+            self._waiting(job)
+            await self._drop_signal(session, job.id)
+            self._write(
+                session,
+                row,
+                job,
+                "segmentation_fallback",
+                {"code": reason, "revision": job.plan_revision, "page_count": len(job.page_refs())},
             )
             return job
 

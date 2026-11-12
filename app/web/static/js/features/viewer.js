@@ -1,6 +1,7 @@
 // app/web/static/js/features/viewer.js
 /** Просмотр по PageRef с загрузкой только выбранного окна миниатюр. */
 import { pageKey } from "./boundary_state.js";
+import { previewURL } from "../previews.js";
 
 export function createViewer() {
   /** Сохраняет физический выбор при progressive preview, polling и обновлении плана. */
@@ -24,16 +25,18 @@ export function createViewer() {
       if (begin + i === selected) button.setAttribute("aria-current", "page");
       const number = document.createElement("span"); number.textContent = begin + i + 1; button.append(number);
       button.addEventListener("click", () => { selected = begin + i; show(); }); thumbnails.append(button);
-      load(page).then(meta => {
+      load(page).then(async meta => {
         if (token !== sequence || !meta?.thumbnail_url) return;
-        const thumb = document.createElement("img"); thumb.src = meta.thumbnail_url; thumb.alt = ""; thumb.loading = "lazy"; button.prepend(thumb);
+        const url = await previewURL(meta.thumbnail_url); if (token !== sequence) return;
+        const thumb = document.createElement("img"); thumb.src = url; thumb.alt = ""; thumb.loading = "lazy"; button.prepend(thumb);
       }).catch(() => {});
     }
     try {
       const meta = await load(ref); if (token !== sequence) return;
       local.hidden = true; image.hidden = !meta?.preview_url; empty.hidden = !!meta?.preview_url;
       if (meta?.preview_url) {
-        if (image.getAttribute("src") !== meta.preview_url) image.src = meta.preview_url;
+        const url = await previewURL(meta.preview_url); if (token !== sequence) return;
+        if (image.getAttribute("src") !== url) image.src = url;
         image.alt = "Страница " + ref.page_number + " исходного документа";
       } else empty.textContent = "Превью этой страницы ещё готовится…";
     } catch { if (token === sequence) { image.hidden = true; empty.hidden = false; empty.textContent = "Превью временно недоступно"; } }

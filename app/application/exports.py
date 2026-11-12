@@ -6,7 +6,12 @@ from datetime import timedelta
 
 from app.application.intake import Intake
 from app.application.ports import DownloadSigner
-from app.domain.boundaries import draft_from_vlm, source_file_plan, validate_assignment
+from app.domain.boundaries import (
+    draft_from_vlm,
+    single_page_plan,
+    source_file_plan,
+    validate_assignment,
+)
 from app.domain.errors import IntakeError
 from app.domain.jobs import TERMINAL, Job, utcnow
 from app.domain.schema import BatchResult
@@ -56,7 +61,15 @@ class Exports:
                 pass
         assigned = sum(len(d.pages) for d in draft.documents) if draft else 0
         excluded = len(draft.excluded_pages) if draft else 0
-        initial = draft_from_vlm(proposal) if proposal else source_file_plan(physical)
+        initial = (
+            draft_from_vlm(proposal)
+            if proposal
+            else (
+                single_page_plan(physical)
+                if job.manifest.get("segmentation_fallback")
+                else source_file_plan(physical)
+            )
+        )
         return {
             "auto_split": job.auto_split,
             "skip_segmentation": job.skip_segmentation,
@@ -78,6 +91,7 @@ class Exports:
             if job.approved_plan
             else None,
             "initial_plan": initial.model_dump(mode="json"),
+            "fallback": job.manifest.get("segmentation_fallback"),
         }
 
     def page_slice(self, job: Job, offset: int = 0, limit: int = 60) -> dict:
@@ -161,6 +175,7 @@ class Exports:
             "expires_at": job.expires_at,
             "cursor": job.cursor,
             "error": job.error,
+            "segmentation_fallback": job.manifest.get("segmentation_fallback"),
             "sources": sources,
             "pages": pages,
             "artifacts": artifacts,

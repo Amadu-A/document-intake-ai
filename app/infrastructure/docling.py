@@ -9,6 +9,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from time import monotonic
 
 import httpx
 import pymupdf
@@ -18,11 +19,16 @@ from app.core.observability import timed
 from app.domain.errors import IntakeError
 from app.domain.segmentation import windows
 from app.infrastructure.conversion import stop_process
+from app.infrastructure.docling_tasks import DoclingTasks, retry_delay
 
 
 def response_error(response: httpx.Response) -> IntakeError:
     """Описывает отказ Docling без копирования input, OCR, секретов или upstream-сообщений."""
     message = f"Docling отклонил OCR-запрос: HTTP {response.status_code}"
+    if response.status_code in {429, 503}:
+        return IntakeError(
+            "docling_busy", message + "; исчерпан ограниченный срок ожидания свободного OCR", 503
+        )
     try:
         payload = response.json() if len(response.content) <= 65536 else None
         detail = payload.get("detail") if isinstance(payload, dict) else None
@@ -158,6 +164,55 @@ class DoclingOCR:
     def __init__(self, settings, client: httpx.AsyncClient) -> None:
         """Принимает проверенную конфигурацию и HTTP-клиент без чтения чужих секретов."""
         self.settings, self.client = settings, client
+        self._request_lock = asyncio.Lock()
+        self._next_request_at = 0.0
+        self.tasks = DoclingTasks(settings, client)
+
+    async def _request(
+        self, content: bytes, parameters: dict, pages: list[dict], emit: Emit
+    ) -> httpx.Response:
+        """Сериализует OCR процесса; при перегрузке ограниченно повторяет запрос с паузой."""
+        async with self._request_lock:
+            fingerprint = [self._cache_key(p) for p in pages]
+            task_path = self.tasks.path(pages, fingerprint)
+            if self.settings.docling_async:
+                identifier = await asyncio.to_thread(self.tasks.load, task_path, fingerprint)
+                if identifier:
+                    return await self.tasks.wait(identifier, emit)
+            for attempt in range(1, self.settings.docling_max_attempts + 1):
+                await asyncio.sleep(max(0, self._next_request_at - monotonic()))
+                response = await self.client.post(
+                    self.settings.docling_base_url.rstrip("/")
+                    + "/v1/convert/file"
+                    + ("/async" if self.settings.docling_async else ""),
+                    headers={"X-Api-Key": self.settings.docling_api_key.get_secret_value()},
+                    files={"files": ("window.pdf", content, "application/pdf")},
+                    data=parameters,
+                    timeout=self.settings.docling_timeout_seconds,
+                )
+                self._next_request_at = monotonic() + self.settings.docling_request_interval_seconds
+                if response.status_code not in {429, 502, 503, 504}:
+                    if response.status_code == 200 and self.settings.docling_async:
+                        identifier = self.tasks.task_id(response.json())
+                        await asyncio.to_thread(self.tasks.save, task_path, fingerprint, identifier)
+                        return await self.tasks.wait(identifier, emit)
+                    return response
+                delay = retry_delay(response, attempt)
+                if attempt == self.settings.docling_max_attempts or (
+                    delay > self.settings.docling_retry_max_seconds
+                ):
+                    return response
+                # Слот остаётся занят: другие coroutine не обходят Retry-After параллельным POST.
+                self._next_request_at = max(self._next_request_at, monotonic() + delay)
+                await emit(
+                    "ocr_retry",
+                    {
+                        "attempt": attempt,
+                        "http_status": response.status_code,
+                        "retry_after_seconds": round(delay, 2),
+                    },
+                )
+        raise AssertionError("Настройка DOCLING_MAX_ATTEMPTS должна быть положительной")
 
     def _cache_key(self, page: dict) -> dict:
         """Привязывает OCR к исходнику, физической странице и действующим параметрам адаптера."""
@@ -318,13 +373,7 @@ class DoclingOCR:
             "abort_on_error": "true",
         }
         try:
-            response = await self.client.post(
-                self.settings.docling_base_url.rstrip("/") + "/v1/convert/file",
-                headers={"X-Api-Key": self.settings.docling_api_key.get_secret_value()},
-                files={"files": ("window.pdf", content, "application/pdf")},
-                data=parameters,
-                timeout=self.settings.docling_timeout_seconds,
-            )
+            response = await self._request(content, parameters, pages, emit)
             if response.status_code != 200:
                 raise response_error(response)
             data = response.json()
@@ -362,6 +411,9 @@ class DoclingOCR:
                 output.append(
                     {**page, "ocr": context[:20000], "ocr_truncated": len(context) > 20000}
                 )
+            if self.settings.docling_async:
+                task_path = self.tasks.path(pages, [self._cache_key(p) for p in pages])
+                await asyncio.to_thread(task_path.unlink, missing_ok=True)
             return output
         except (httpx.HTTPError, TimeoutError) as exc:
             raise IntakeError(

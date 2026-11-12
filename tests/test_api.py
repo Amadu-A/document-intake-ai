@@ -157,8 +157,8 @@ async def test_browser_cookie_csrf_and_origin(client):
     ).status_code == 200
 
 
-async def test_missing_and_duplicate_pages_trigger_retry_then_fail(client, container):
-    """Backend не исправляет семантические границы после исчерпания ограниченных VLM-повторов."""
+async def test_missing_pages_trigger_retry_then_unverified_page_draft(client, container):
+    """После ограниченных повторов backend предлагает лишь черновик для явной проверки."""
     response = await submit(client, 2)
     job_id = response.json()["job_id"]
     job = await container.database.get(job_id)
@@ -166,8 +166,10 @@ async def test_missing_and_duplicate_pages_trigger_retry_then_fail(client, conta
     container.vision.answers.extend([bad, bad])
     await run_job(container, job_id)
     status = (await client.get(f"/api/v1/jobs/{job_id}", headers=KEY)).json()
-    assert status["status"] == "failed"
-    assert status["error"]["code"] == "invalid_segmentation"
+    assert status["status"] == "awaiting_confirmation"
+    assert status["segmentation_source"] == "page_fallback"
+    assert status["segmentation_fallback"]["code"] == "invalid_segmentation"
+    assert status["error"] is None and not status["plan_locked"]
     assert status["sources"][0]["file_url"].startswith("http://testserver/api/")
     assert (await client.get(f"/api/v1/jobs/{job_id}/result", headers=KEY)).status_code == 409
 

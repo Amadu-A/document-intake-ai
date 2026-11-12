@@ -172,11 +172,15 @@ class Analyze:
                     "window_index": index,
                     "window_count": len(chunks),
                     "instruction": "Границы окна могут продолжаться за его пределами. "
-                    "Сейчас распределяй только страницы данного окна; итог решается отдельно.",
+                    "Сейчас распределяй только страницы данного окна; итог решается отдельно. "
+                    "Связанные листы могут быть разделены 1–5 чужими страницами. "
+                    "Состав одной регистрации может быть несмежным; чужие листы не включай в неё. "
+                    "Одинаковая форма уведомлений сама по себе не объединяет разные уведомления. "
+                    "reason — одно короткое предложение; сомнительные границы — needs_review.",
                 },
                 chunk,
                 Plan,
-                lambda p, refs=refs: validate_plan(p, refs, require_verified=len(chunks) == 1),
+                lambda p, refs=refs: validate_plan(p, refs, require_verified=False),
                 emit,
             )
             proposals.append(plan.model_dump(mode="json"))
@@ -195,12 +199,20 @@ class Analyze:
                 "task": "global_reconciliation",
                 "pages": [p.model_dump() for p in refs],
                 "window_proposals": proposals,
+                "page_evidence": [
+                    {
+                        "file_id": p["file_id"],
+                        "page_number": p["page_number"],
+                        "ocr": p.get("ocr", "")[:500],
+                    }
+                    for p in pages
+                ],
                 "instruction": "Прими глобальное решение, согласуй пересечения и продолжения. "
                 "Не повторяй страницы перекрытия. Только ты определяешь границы.",
             },
             [],
             Plan,
-            lambda p: validate_plan(p, refs),
+            lambda p: validate_plan(p, refs, require_verified=False),
             emit,
         )
 
@@ -379,10 +391,29 @@ class Analyze:
             recognized = None
             if not job.skip_segmentation and job.approved_plan is None:
                 if job.proposed_plan is None:
-                    await emit("stage", {"stage": "docling", "progress": 20})
-                    recognized = await self.ocr.recognize(pages, emit)
                     await emit("stage", {"stage": "segmentation_vlm", "progress": 35})
-                    plan = await self._plan(job, recognized, emit)
+                    try:
+                        async with asyncio.timeout(self.settings.vlm_segmentation_timeout_seconds):
+                            # Границы определяются изображениями VLM. OCR нужен для реквизитов
+                            # после фиксации состава; review не расходует OCR на всю пачку.
+                            plan = await self._plan(job, pages, emit)
+                        if job.auto_split:
+                            validate_plan(plan, job.page_refs())
+                    except TimeoutError:
+                        await self.repository.fallback_pages(
+                            job.id, job.fence, "segmentation_timeout"
+                        )
+                        return
+                    except IntakeError as exc:
+                        if exc.code not in {
+                            "invalid_segmentation",
+                            "schema_validation_failed",
+                            "model_invalid_json",
+                            "model_output_limit",
+                        }:
+                            raise
+                        await self.repository.fallback_pages(job.id, job.fence, exc.code)
+                        return
                     job = await self.repository.propose(job.id, job.fence, plan)
                 elif not job.auto_split:
                     job = await self.repository.propose(job.id, job.fence, job.proposed_plan)
@@ -435,6 +466,12 @@ class Analyze:
                 for s in job.sources
             }
             plan_warnings = job.proposed_plan.warnings if job.proposed_plan else []
+            if job.manifest.get("segmentation_fallback"):
+                plan_warnings = [
+                    *plan_warnings,
+                    "Авторазделение не подтверждено; использована проверенная пользователем "
+                    "постраничная разметка",
+                ]
             has_warnings = bool(plan_warnings or manifest["excluded_pages"]) or any(
                 p.get("ocr_truncated") for p in recognized
             )

@@ -14,8 +14,9 @@ class Prompts:
     def __init__(self, repository: PromptRepository, directory: Path) -> None:
         """Подключает repository и каталог утверждённых промптов при сборке приложения."""
         self.repository = repository
+        self.versions = {"segmentation": "v2", "extraction": "v1"}
         self.base = {
-            stage: (directory / f"{stage}-v1.txt").read_text("utf-8")
+            stage: (directory / f"{stage}-{self.versions[stage]}.txt").read_text("utf-8")
             for stage in ("segmentation", "extraction")
         }
 
@@ -26,7 +27,8 @@ class Prompts:
             "prompts": saved or dict(self.base),
             "base_prompts": dict(self.base),
             "versions": {
-                k: "v1:" + hashlib.sha256(v.encode()).hexdigest()[:12] for k, v in self.base.items()
+                k: self.versions[k] + ":" + hashlib.sha256(v.encode()).hexdigest()[:12]
+                for k, v in self.base.items()
             },
         }
 

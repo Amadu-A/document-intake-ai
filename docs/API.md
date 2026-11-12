@@ -57,8 +57,9 @@ SSE-события имеют возрастающий `id`. `text_delta` сод
 3. `GET /api/v1/jobs/{job_id}/result`, затем скачать реальные PDF по
    `files[].documents[].attachment_file.file_url`. Проверить SHA-256/размер из status.
 
-Старые клиенты не передают новые flags и продолжают работать без подтверждения.
-Они не обязаны использовать редактор, SSE, preview или ручные endpoints.
+Старые клиенты не передают новые flags и при корректном плане работают автоматически.
+Исключение — разрешённый владельцем резервный путь page_fallback, описанный ниже.
+Интеграции обязаны различать awaiting_confirmation и успешное завершение.
 
 ## Необязательные режимы и редактор
 
@@ -119,12 +120,39 @@ revision: только одно успешно, второе `409 plan_version_c
 Start во время подготовки фиксирует намерение запустить анализ, подготовка не повторяется.
 Review освобождает worker/lease; после confirm используются OCR checkpoints и исходное
 предложение. Для ручных групп VLM извлекает внутренние приложения, сохраняя их страницы.
+Определение границ работает по изображениям без предварительного OCR всей пачки;
+Docling вызывается для извлечения после фиксации состава.
 `excluded_pages` присутствует только в plan/status-счётчиках/manifest; JSON 1.0 неизменен.
 
 UI использует `include_pages=false` для status/snapshot/SSE; изображения получает через
 пагинацию. Legacy default `include_pages=true` сохраняется. Новые события:
 `source_discovered`, `page_ready`, `preview_ready`, `mode_changed`, `draft_saved`,
 `plan_approved`, `plan_locked`; пути файловой системы в SSE не выдаются.
+Дополнительно: `ocr_retry` (attempt/http_status/retry_after_seconds) и
+`segmentation_fallback` (code/revision/page_count).
+
+Если разделение не вернуло корректный план после повторов, auto-план не подтверждён
+VLM или истёк `VLM_SEGMENTATION_TIMEOUT_SECONDS`, статус —
+`awaiting_confirmation`, flags false/true, source `page_fallback`, `plan_locked=false`.
+`draft_plan` содержит по одной группе на физический лист, `fallback.code` в segmentation
+и `segmentation_fallback.code` в status объясняют причину. Это технический черновик,
+не семантический результат. `/start` и `/result` возвращают 409 до явного confirm;
+после правок/подтверждения используется ровно сохранённый состав. Автоматически
+подтверждать fallback интеграционным клиентом нельзя.
+
+Несмежный список страниц допустим: группа [101,103] не включает лист 102. Порядок
+листов внутри PDF остаётся исходным. В UI Ctrl/Cmd выбирает отдельные листы,
+«Создать диапазон» переносит выбранные страницы из прежних групп в новую.
+
+Минутные HTTP-бюджеты независимы: команды RATE_LIMIT_PER_MINUTE=120,
+чтение READ_RATE_LIMIT_PER_MINUTE=600, preview/thumbnail PREVIEW_RATE_LIMIT_PER_MINUTE=2400.
+Ограничиваются owner и сеть; произвольный query не создаёт новый счётчик.
+429 rate_limit содержит Retry-After: 60. Повторять команды без idempotency нельзя.
+Docling после ограниченных повторов 429/503 возвращает docling_busy, без upstream payload.
+Длительное OCR-окно ожидается через async task с отдельным сроком, без повторных
+POST при polling/restart. `docling_task_timeout` и
+`docling_task_result_unavailable` отличают истечение ожидания от отсутствующего
+результата. Эти статусы не маскируются под успешное распознавание.
 
 Ожидание ручного решения: 3600 секунд после готовности всех превью; правки не продлевают
 TTL. Отдельные конечные бюджеты действуют для очереди, превью и анализа. После завершения
@@ -181,6 +209,8 @@ with httpx.Client(timeout=120, trust_env=False) as client:
         status = response.json()
         if status["status"] in {"failed", "cancelled"}:
             raise RuntimeError(status.get("error", {}).get("code", status["status"]))
+        if status["status"] == "awaiting_confirmation":
+            raise RuntimeError("Требуется проверка состава: " + status["segmentation_source"])
         if status["status"] in {"completed", "completed_with_warnings"}:
             break
         time.sleep(2)

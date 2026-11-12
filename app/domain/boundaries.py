@@ -11,7 +11,13 @@ from app.domain.schema import StrictModel
 from app.domain.segmentation import PageRef, Plan, PlannedAttachment
 
 SegmentationSource = Literal[
-    "source_files", "vlm_auto", "vlm_proposed", "vlm_confirmed", "manual", "manual_override"
+    "source_files",
+    "vlm_auto",
+    "vlm_proposed",
+    "vlm_confirmed",
+    "manual",
+    "manual_override",
+    "page_fallback",
 ]
 
 
@@ -141,5 +147,15 @@ def draft_from_vlm(plan: Plan) -> ManualPlan:
         documents=[
             ManualDocument(client_id=f"vlm-{d.document_index}", pages=list(d.pages))
             for d in plan.documents
+        ]
+    )
+
+
+def single_page_plan(pages: list[PageRef]) -> ManualPlan:
+    """Создаёт безопасный черновик по листам; он не является распознанными регистрациями."""
+    return ManualPlan(
+        documents=[
+            ManualDocument(client_id=f"page-{index}", pages=[page])
+            for index, page in enumerate(pages, 1)
         ]
     )

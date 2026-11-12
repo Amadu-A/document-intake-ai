@@ -27,7 +27,7 @@
 .panel__heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 18px; }
 .panel__muted { color: var(--color-muted); font-size: 11px; }
 .structure__status { color: var(--color-muted); font-size: 12px; padding: 12px; background: #f4f8ff; border-radius: 10px; }
-.structure__documents { display: grid; gap: 13px; margin-bottom: 18px; }
+.structure__documents { display: grid; gap: 13px; margin-bottom: 18px; max-height: 70vh; overflow-y: auto; overscroll-behavior: contain; }
 .structure__document { padding: 13px; border: 1px solid #c3d9ff; border-radius: 12px; background: #f8fbff; }
 .structure__pages { display: flex; flex-wrap: wrap; gap: 4px; margin: 10px 0; }
 .structure__attachment { border-top: 1px solid #e1eaf5; padding: 8px 0; font-size: 11px; }

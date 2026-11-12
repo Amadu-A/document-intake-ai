@@ -185,8 +185,9 @@ def test_strict_json_rejects_ambiguous_output(value):
 @pytest.mark.private
 def test_user_fixtures_keep_backward_compatible_shape():
     """Проверяет форму пяти JSON отдельно от исторической семантики значений."""
-    fixtures = list(Path("examples").glob("*.json"))
-    if len(fixtures) != 5:
+    matrix = json.loads(Path("tests/fixtures/regression_matrix.json").read_text("utf-8"))
+    fixtures = [Path("examples", case["file"]).with_suffix(".json") for case in matrix["cases"]]
+    if not all(path.is_file() for path in fixtures):
         pytest.skip("NOT_RUN: приватные примеры недоступны")
     for path in fixtures:
         data = json.loads(path.read_text("utf-8"))

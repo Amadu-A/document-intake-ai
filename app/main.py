@@ -77,7 +77,9 @@ def create_app(container=None) -> FastAPI:
     async def domain_error(_request: Request, exc: IntakeError):
         """Преобразует только безопасные предметные сведения в стабильный envelope."""
         return JSONResponse(
-            {"error": {"code": exc.code, "message": exc.message}}, status_code=exc.status
+            {"error": {"code": exc.code, "message": exc.message}},
+            status_code=exc.status,
+            headers={"Retry-After": "60"} if exc.code == "rate_limit" else None,
         )
 
     @application.exception_handler(RequestValidationError)

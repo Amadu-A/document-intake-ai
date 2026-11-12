@@ -19,6 +19,7 @@ class AnalysisSettings(Protocol):
     vlm_window_pages: int
     vlm_overlap_pages: int
     vlm_reconciliation_windows: int
+    vlm_segmentation_timeout_seconds: int
 
 
 class DownloadSigner(Protocol):
@@ -104,6 +105,10 @@ class JobRepository(Protocol):
 
     async def propose(self, job_id: str, fence: int, plan: Plan) -> Job:
         """Сохраняет предложение VLM, не перезаписывая ручное решение нового поколения."""
+        ...
+
+    async def fallback_pages(self, job_id: str, fence: int, reason: str) -> Job:
+        """Предлагает технические одиночные страницы только для обязательной ручной проверки."""
         ...
 
     async def lock_plan(self, job_id: str, fence: int) -> Job:

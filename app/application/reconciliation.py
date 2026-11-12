@@ -14,17 +14,22 @@ async def reconcile(analysis, job, pages: list[dict], plans: list[Plan], emit) -
     positions = {p: i for i, p in enumerate(physical)}
 
     async def pair(left: Plan, right: Plan) -> Plan:
-        """Пересогласует все группы перекрытия и ближайшие группы обеих сторон."""
+        """Включает соседство до пяти чужих листов; принадлежность всех групп снова решает VLM."""
         left_refs = {p for d in left.documents for p in d.pages}
         right_refs = {p for d in right.documents for p in d.pages}
         overlap = left_refs & right_refs
-        # Выбираются только физически соприкасающиеся группы; их семантику решает модель.
+        seam = sorted(overlap, key=positions.__getitem__)
+        center = positions[seam[0]] if seam else positions[right.documents[0].pages[0]]
+        radius = max(6, analysis.settings.vlm_window_pages // 2)
+        low, high = max(0, center - radius), min(len(pages), center + radius + 1)
+        # Координатное соседство лишь расширяет контекст, не назначает ни одной границы.
         left_start = next(
-            (i for i, d in enumerate(left.documents) if set(d.pages) & overlap),
+            (i for i, d in enumerate(left.documents) if any(positions[p] >= low for p in d.pages)),
             len(left.documents) - 1,
         )
         right_end = max(
-            (i for i, d in enumerate(right.documents) if set(d.pages) & overlap), default=0
+            (i for i, d in enumerate(right.documents) if any(positions[p] < high for p in d.pages)),
+            default=0,
         )
         left_start = min(
             left_start,
@@ -40,10 +45,8 @@ async def reconcile(analysis, job, pages: list[dict], plans: list[Plan], emit) -
         affected = left.documents[left_start:] + right.documents[: right_end + 1]
         refs = sorted({p for d in affected for p in d.pages}, key=positions.__getitem__)
         allowed_refs = set(refs)
-        seam = sorted(overlap, key=positions.__getitem__)
-        center = positions[seam[0]] if seam else positions[right.documents[0].pages[0]]
-        radius = max(1, analysis.settings.vlm_window_pages // 2)
-        images = pages[max(0, center - radius) : center + radius]
+        image_start = max(0, center - analysis.settings.vlm_window_pages // 2)
+        images = pages[image_start : image_start + analysis.settings.vlm_window_pages]
         proposals = [
             compact(
                 Plan(documents=left.documents[left_start:], unassigned_pages=[], warnings=[]),
@@ -59,7 +62,7 @@ async def reconcile(analysis, job, pages: list[dict], plans: list[Plan], emit) -
             """Ни одна страница затронутых групп не должна потеряться или продублироваться."""
             expanded = candidate.expand(physical)
             try:
-                validate_plan(expanded, refs)
+                validate_plan(expanded, refs, require_verified=False)
             except IntakeError as exc:
                 counts = Counter(p for doc in expanded.documents for p in doc.pages)
                 duplicate = sorted(
@@ -89,8 +92,22 @@ async def reconcile(analysis, job, pages: list[dict], plans: list[Plan], emit) -
                 or [{"file_id": physical[0].file_id, "page_count": len(physical)}],
                 "proposals": proposals,
                 "allowed_spans": page_spans(refs, physical),
+                "page_evidence": [
+                    {
+                        "file_id": p["file_id"],
+                        "page_number": p["page_number"],
+                        "ocr": p.get("ocr", "")[:1500],
+                        "ocr_truncated": p.get("ocr_truncated", False)
+                        or len(p.get("ocr", "")) > 1500,
+                    }
+                    for p in pages[low:high]
+                ],
                 "instruction": "Ты принимаешь итоговое решение на этом уровне дерева. "
                 "Согласуй все предложенные группы, продолжения и приложения. "
+                "Связанные листы могут быть перемешаны с 1–5 чужими страницами. "
+                "Несмежные spans одной регистрации допустимы; "
+                "чужие страницы остаются в других группах. "
+                "Одинаковый бланк или отправитель не доказывает принадлежность одному документу. "
                 "spans — включительные сквозные позиции от 1 в исходной последовательности. "
                 "Верни ровно allowed_spans, без добавления остальных страниц исходного файла. "
                 "Номер общего количества страниц на изображении не расширяет allowed_spans. "
@@ -118,7 +135,11 @@ async def reconcile(analysis, job, pages: list[dict], plans: list[Plan], emit) -
             unassigned_pages=[],
             warnings=list(dict.fromkeys(left.warnings + right.warnings + merged.warnings)),
         )
-        validate_plan(result, sorted(left_refs | right_refs, key=positions.__getitem__))
+        validate_plan(
+            result,
+            sorted(left_refs | right_refs, key=positions.__getitem__),
+            require_verified=False,
+        )
         return result
 
     while len(plans) > 1:
@@ -130,5 +151,5 @@ async def reconcile(analysis, job, pages: list[dict], plans: list[Plan], emit) -
                 else plans[offset]
             )
         plans = next_level
-    validate_plan(plans[0], physical)
+    validate_plan(plans[0], physical, require_verified=False)
     return plans[0]

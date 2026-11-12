@@ -1,7 +1,7 @@
 // app/web/static/js/features/boundary_state.js
 /** Чистые операции редактора над физическими PageRef; сервер повторно валидирует каждую запись. */
 export const pageKey = ref => `${ref.file_id}:${ref.page_number}`;
-export const sourceLabel = source => ({ source_files: "Файлы задали границы", vlm_auto: "VLM разделила", vlm_proposed: "VLM предложила", vlm_confirmed: "Предложение VLM подтверждено", manual: "Размечено пользователем", manual_override: "Скорректировано вручную" })[source] || "Исходная разметка";
+export const sourceLabel = source => ({ source_files: "Файлы задали границы", vlm_auto: "VLM разделила", vlm_proposed: "VLM предложила", vlm_confirmed: "Предложение VLM подтверждено", manual: "Размечено пользователем", manual_override: "Скорректировано вручную", page_fallback: "Постраничный черновик · требуется проверка" })[source] || "Исходная разметка";
 
 export function newGroupId() {
   /** Создаёт несекретный клиентский ID, доступный также на LAN HTTP без crypto.randomUUID. */
@@ -13,7 +13,7 @@ export function groupFor(plan, ref) {
   return plan?.documents.find(d => d.pages.some(p => pageKey(p) === pageKey(ref)));
 }
 
-export function splitRange(plan, ref) {
+export function splitRange(plan, ref, physical) {
   /** Делит после выбранной страницы; обе получившиеся группы обязаны быть непустыми. */
   const next = structuredClone(plan), group = groupFor(next, ref);
   if (!group) throw new Error("Выберите страницу регистрационного диапазона");
@@ -21,6 +21,8 @@ export function splitRange(plan, ref) {
   if (at >= group.pages.length) throw new Error("После выбранной страницы диапазон уже заканчивается");
   const index = next.documents.indexOf(group);
   next.documents.splice(index + 1, 0, { client_id: newGroupId(), pages: group.pages.splice(at) });
+  const order = new Map(physical.map((p, i) => [pageKey(p), i]));
+  next.documents.sort((a, b) => order.get(pageKey(a.pages[0])) - order.get(pageKey(b.pages[0])));
   return next;
 }
 
@@ -46,10 +48,12 @@ export function excludePages(plan, selected) {
 }
 
 export function createRange(plan, selected, physical) {
-  /** Назначает свободные/исключённые страницы новой группе в исходном физическом порядке. */
-  if (!selected.length || selected.some(p => groupFor(plan, p))) throw new Error("Выберите страницы вне диапазонов");
+  /** Собирает явно выбранные, в том числе несмежные листы; чужие промежуточные страницы сохраняет. */
+  if (!selected.length) throw new Error("Выберите страницы нового диапазона");
   const next = structuredClone(plan), keys = new Set(selected.map(pageKey));
   const order = new Map(physical.map((p, i) => [pageKey(p), i]));
+  for (const document of next.documents) document.pages = document.pages.filter(p => !keys.has(pageKey(p)));
+  next.documents = next.documents.filter(d => d.pages.length);
   next.excluded_pages = next.excluded_pages.filter(p => !keys.has(pageKey(p)));
   next.documents.push({ client_id: newGroupId(), pages: [...selected].sort((a, b) => order.get(pageKey(a)) - order.get(pageKey(b))) });
   next.documents.sort((a, b) => order.get(pageKey(a.pages[0])) - order.get(pageKey(b.pages[0])));

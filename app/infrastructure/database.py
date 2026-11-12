@@ -520,8 +520,8 @@ class Database(BoundaryTransactions):
             row.prompts = prompts
             row.expires_at = utcnow() + timedelta(seconds=self.settings.session_ttl_seconds)
 
-    async def throttle(self, owner: str) -> None:
-        """Применяет общий минутный лимит без локального бесконтрольного словаря."""
+    async def throttle(self, owner: str, *, limit: int | None = None) -> None:
+        """Считает межпроцессный transport-бюджет отдельно от управляющих команд."""
         async with self.sessions.begin() as session:
             await self._serialize_admission(session)
             row = await session.get(LimitRow, owner, with_for_update=True)
@@ -531,7 +531,7 @@ class Database(BoundaryTransactions):
                 session.add(row)
             if row.window != window:
                 row.window, row.count = window, 0
-            if row.count >= self.settings.rate_limit_per_minute:
+            if row.count >= (self.settings.rate_limit_per_minute if limit is None else limit):
                 raise IntakeError("rate_limit", "Слишком много запросов", 429)
             row.count += 1
 

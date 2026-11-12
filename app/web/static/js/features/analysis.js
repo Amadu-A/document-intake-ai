@@ -5,12 +5,12 @@ import { renderPlan, renderFacts, journal } from "./results.js";
 import { createBoundaryEditor } from "./boundaries.js";
 
 const terminal = new Set(["completed", "completed_with_warnings", "failed", "cancelled"]);
-const labels = { uploaded: "Загружено", queued: "В очереди", running: "Обработка", completed: "Завершено", completed_with_warnings: "Завершено с предупреждениями", failed: "Ошибка", cancelled: "Отменено", expired: "Срок хранения истёк" };
+const labels = { uploaded: "Загружено", queued: "В очереди", running: "Обработка", awaiting_confirmation: "Ожидает проверки состава", completed: "Завершено", completed_with_warnings: "Завершено с предупреждениями", failed: "Ошибка", cancelled: "Отменено", expired: "Срок хранения истёк" };
 
 export function initializeAnalysis(viewer) {
   /** Восстанавливает выбранное задание из sessionStorage без сохранения документов/ключей. */
   let jobId = sessionStorage.getItem("intake_job"), snapshot = null, confirmed = null, source = null, cursor = 0;
-  let pollTimer = null, raw = "", fetching = false, stopped = false;
+  let pollTimer = null, refreshTimer = null, raw = "", fetching = false, stopped = false;
   const start = document.querySelector("[data-start]");
   const input = document.querySelector("[data-files]");
   const json = document.querySelector("[data-json]");
@@ -35,7 +35,8 @@ export function initializeAnalysis(viewer) {
       json.textContent = JSON.stringify({ status: data.status, plan_revision: enriched.segmentation.plan_revision, draft_plan: enriched.segmentation.draft_plan }, null, 2);
       document.querySelector("[data-validation]").textContent = "Черновик состава · реквизиты ещё не извлечены · экспорт недоступен";
     }
-    notice(data.error?.message || (data.status === "awaiting_confirmation" ? "Проверьте состав документов и подтвердите извлечение" : labels[data.status]), data.status === "failed");
+    const fallback = data.segmentation_source === "page_fallback";
+    notice(data.error?.message || (fallback && data.status === "awaiting_confirmation" ? "Авторазделение не подтверждено. Предложен черновик по одному листу: объедините связанные страницы и подтвердите состав." : data.status === "awaiting_confirmation" ? "Проверьте состав документов и подтвердите извлечение" : labels[data.status]), data.status === "failed" || fallback && data.status === "awaiting_confirmation");
   }
   async function refresh() {
     /** Восстанавливает авторитетный snapshot и получает финальный JSON только после успеха. */
@@ -65,7 +66,7 @@ export function initializeAnalysis(viewer) {
   function connect() {
     /** EventSource повторяет соединение с cursor; polling закрывает разрывы и проверяет TTL. */
     source?.close(); source = new EventSource(`/api/v1/jobs/${jobId}/events?after=${cursor}&include_pages=false`);
-    for (const kind of ["created", "queued", "started", "stage", "normalized", "source_discovered", "page_ready", "preview_ready", "mode_changed", "draft_saved", "plan_approved", "plan_locked", "segmentation", "model_retry", "retry", "warning", "terminal", "page_started", "text_delta", "expired"]) {
+    for (const kind of ["created", "queued", "started", "stage", "normalized", "source_discovered", "page_ready", "preview_ready", "mode_changed", "draft_saved", "plan_approved", "plan_locked", "segmentation", "segmentation_fallback", "ocr_retry", "model_retry", "retry", "warning", "terminal", "page_started", "text_delta", "expired"]) {
       source.addEventListener(kind, event => {
         cursor = Math.max(cursor, Number(event.lastEventId) || 0);
         const data = JSON.parse(event.data);
@@ -76,7 +77,9 @@ export function initializeAnalysis(viewer) {
           }
         } else if (kind !== "page_started") {
           journal(kind, data);
-          if (!["model_retry", "retry", "warning"].includes(kind)) refresh();
+          if (!["model_retry", "retry", "warning", "ocr_retry"].includes(kind) && !refreshTimer) {
+            refreshTimer = setTimeout(() => { refreshTimer = null; refresh(); }, 1000);
+          }
         }
       });
     }
@@ -90,7 +93,7 @@ export function initializeAnalysis(viewer) {
   async function accept(files) {
     /** Сохраняет выбранную пачку без VLM-вызова; общий размер ограничивает сервер. */
     if (!files.length) return;
-    clearTimeout(pollTimer); source?.close(); confirmed = null; snapshot = null; cursor = 0; stopped = false; raw = "";
+    clearTimeout(pollTimer); clearTimeout(refreshTimer); refreshTimer = null; source?.close(); confirmed = null; snapshot = null; cursor = 0; stopped = false; raw = "";
     start.disabled = true; document.querySelector("[data-export]").disabled = true;
     viewer.local(files[0]); notice("Загрузка оригиналов…");
     const form = new FormData(); [...files].forEach(file => form.append("files", file));

@@ -18,6 +18,20 @@ def services(request: Request):
     return request.app.state.container
 
 
+def request_budget(request: Request) -> tuple[str, int]:
+    """Выбирает бюджет по доверенному маршруту, независимо от query и пользовательских ID."""
+    settings = services(request).settings
+    if request.method in {"GET", "HEAD"}:
+        route = getattr(request.scope.get("route"), "path", "")
+        if route in {
+            "/api/v1/jobs/{job_id}/pages/{file_id}/{page}/preview",
+            "/api/v1/jobs/{job_id}/pages/{file_id}/{page}/thumbnail",
+        }:
+            return "preview", settings.preview_rate_limit_per_minute
+        return "read", settings.read_rate_limit_per_minute
+    return "control", settings.rate_limit_per_minute
+
+
 async def optional_owner(request: Request, key: Annotated[str | None, Security(api_key_header)]):
     """Проверяет API key или сессию; cookie mutation требует точных Origin и CSRF."""
     return await authenticate(request, key)
@@ -28,11 +42,13 @@ async def authenticate(request: Request, key: str | None) -> str | None:
     if getattr(request.state, "auth_checked", False):
         return request.state.auth_owner
     container = services(request)
+    category, limit = request_budget(request)
     await container.database.throttle(
-        "network:"
+        f"{category}:network:"
         + hashlib.sha256(
             (request.client.host if request.client else "unknown").encode()
-        ).hexdigest()
+        ).hexdigest(),
+        limit=limit,
     )
     if key is not None:
         owner = container.capabilities.integration_owner(key)
@@ -51,7 +67,7 @@ async def authenticate(request: Request, key: str | None) -> str | None:
             ) or not hmac.compare_digest(csrf, container.capabilities.csrf(token)):
                 raise IntakeError("csrf_failed", "Origin или CSRF не подтверждён", 403)
     if owner:
-        await container.database.throttle(owner)
+        await container.database.throttle(f"{category}:{owner}", limit=limit)
     request.state.auth_owner = owner
     request.state.auth_checked = True
     return owner
