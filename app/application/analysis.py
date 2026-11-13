@@ -21,7 +21,7 @@ from app.core.observability import timed
 from app.domain.boundaries import FixedGroup
 from app.domain.compact_plan import CompactPlan, page_spans
 from app.domain.errors import IntakeError, LeaseLost
-from app.domain.extraction import ExtractionDraft
+from app.domain.extraction import ExtractionDraft, PrimaryDateReading
 from app.domain.jobs import Job
 from app.domain.schema import (
     AttachmentFile,
@@ -170,19 +170,20 @@ class Analyze:
         """Повторяет запрос с обратной связью; уточнённая схема не заменяет серверную проверку."""
         feedback = []
         last_code = "schema_validation_failed"
-        uncertain_handwriting = set()
+        uncertain_fields = set()
+        candidate = context.get("candidate")
         if model is ExtractionDraft and context.get("candidate"):
-            uncertain_handwriting.update(
-                ExtractionDraft.model_validate(context["candidate"]).uncertain_handwriting()
+            uncertain_fields.update(
+                ExtractionDraft.model_validate(context["candidate"]).uncertain_fields()
             )
         if schema is None and model in {Plan, CompactPlan}:
             schema = segmentation_schema(model)
         for attempt in range(1, self.settings.model_attempts + 1):
             try:
                 request_schema = model.model_json_schema() if schema is None else schema
-                if uncertain_handwriting:
+                if uncertain_fields:
                     request_schema = deepcopy(request_schema)
-                    for field in uncertain_handwriting:
+                    for field in uncertain_fields:
                         request_schema["$defs"]["Requisites"]["properties"][field] = {
                             "type": "null"
                         }
@@ -190,25 +191,38 @@ class Analyze:
                             "type": "string",
                             "enum": ["ambiguous"],
                         }
+                request_context = {**context, "validation_errors": feedback}
+                if candidate is not None:
+                    request_context["candidate"] = candidate
+                if attempt > 1 and model is ExtractionDraft and candidate is not None:
+                    request_context["revision_instruction"] = (
+                        "Исправь нарушения из validation_errors в предыдущем candidate. "
+                        "Независимые однозначно прочитанные реквизиты сохрани; ошибка номера "
+                        "не делает дату неоднозначной и наоборот. Не заменяй прочитанную дату "
+                        "датой приложения. Пересматривай другой факт только при явном "
+                        "противоречии изображению, отмечая причину в warnings."
+                    )
                 raw = await self.vision.request(
                     prompt,
-                    {**context, "validation_errors": feedback},
+                    request_context,
                     pages,
                     request_schema,
                     emit,
                 )
                 parsed = model.model_validate(raw)
                 if isinstance(parsed, ExtractionDraft):
-                    uncertain_handwriting.update(parsed.uncertain_handwriting())
+                    candidate = parsed.model_dump(mode="json")
+                    uncertain_fields.update(parsed.uncertain_fields())
                     if any(
                         getattr(parsed.requisites, field) is not None
                         or getattr(parsed.primary_readability, field) != "ambiguous"
-                        for field in uncertain_handwriting
+                        for field in uncertain_fields
                     ):
                         raise IntakeError(
                             "schema_validation_failed",
-                            "VLM отметила сомнение в рукописных реквизитах "
-                            f"{sorted(uncertain_handwriting)}. Верни для них null, ambiguous, "
+                            "VLM отметила неоднозначность реквизитов "
+                            f"{['requisites.' + field for field in sorted(uncertain_fields)]}. "
+                            "Верни для них null, ambiguous, "
                             "warning и путь в low_confidence_fields. Повтор без нового "
                             "источника не должен превращать уже отмеченное сомнение в факт.",
                         )
@@ -358,12 +372,89 @@ class Analyze:
             )
         chunks = windows(pages, self.settings.vlm_window_pages, self.settings.vlm_overlap_pages)
         if len(chunks) == 1:
+            date_reading = None
+            if group.attachments and group.main_pages:
+                main = set(group.main_pages)
+                main_images = [
+                    p
+                    for p in pages
+                    if PageRef(file_id=p["file_id"], page_number=p["page_number"]) in main
+                ]
+
+                def validate_date(reading: PrimaryDateReading) -> None:
+                    """Проверяет читаемость и адрес основной страницы без угадывания даты."""
+                    if (reading.readability == "legible") != (reading.document_date is not None):
+                        raise IntakeError(
+                            "schema_validation_failed", "Читаемость даты противоречит значению"
+                        )
+                    if reading.source_page is not None and reading.source_page not in main:
+                        raise IntakeError(
+                            "schema_validation_failed", "Дата ссылается не на основную часть"
+                        )
+                    if reading.readability == "legible" and reading.source_page is None:
+                        raise IntakeError(
+                            "schema_validation_failed", "Читаемая дата требует адрес страницы"
+                        )
+                    if reading.readability == "ambiguous" and not reading.warnings:
+                        raise IntakeError(
+                            "schema_validation_failed", "Неоднозначная дата требует warning"
+                        )
+
+                date_reading = await self._validated(
+                    job.prompts["extraction"],
+                    {
+                        "task": "read_primary_document_date",
+                        "footer_details": True,
+                        "header_detail_page": first_main.model_dump(),
+                        "main_pages": [p.model_dump() for p in group.main_pages],
+                        "instruction": "Прочитай ТОЛЬКО собственную дату составления основного "
+                        "документа по изображениям, независимо от OCR. Не используй даты "
+                        "договоров, расчётов или приложений. День/месяц могут быть рукописными, "
+                        "а год печатным: это одна дата. Сомнение в номере не относится к дате. "
+                        "legible — однозначное чтение и source_page; missing/ambiguous — null; "
+                        "при неоднозначности warning. Верни только поля переданной схемы; "
+                        "полный Extracted сейчас не нужен.",
+                    },
+                    main_images,
+                    PrimaryDateReading,
+                    validate_date,
+                    emit,
+                )
+                value = date_reading.document_date
+                schema["$defs"]["Requisites"]["properties"]["document_date"] = (
+                    {"type": "string", "format": "date", "const": value.isoformat()}
+                    if value is not None
+                    else {"type": "null"}
+                )
+                schema["$defs"]["PrimaryReadability"]["properties"]["document_date"] = {
+                    "type": "string",
+                    "enum": [date_reading.readability],
+                }
+                context["primary_date_evidence"] = date_reading.model_dump(mode="json")
+                context["rules"] += (
+                    " Собственная дата уже независимо прочитана VLM на основных страницах "
+                    "без OCR: сохрани primary_date_evidence, не подменяй её датами приложений."
+                )
+
+            def validate_facts(value: ExtractionDraft) -> None:
+                """Сверяет полный ответ с независимым визуальным чтением даты."""
+                validate_extraction(value, group, job.organization_hint)
+                if date_reading is not None and (
+                    value.requisites.document_date != date_reading.document_date
+                    or value.primary_readability.document_date != date_reading.readability
+                ):
+                    raise IntakeError(
+                        "schema_validation_failed",
+                        "Собственная дата противоречит независимому primary_date_evidence VLM; "
+                        "сохрани его значение и читаемость, не подменяй датой приложения/OCR.",
+                    )
+
             facts = await self._validated(
                 job.prompts["extraction"],
                 {**context, "pages": page_context(pages)},
                 pages,
                 ExtractionDraft,
-                lambda p: validate_extraction(p, group, job.organization_hint),
+                validate_facts,
                 emit,
                 schema=schema,
             )
@@ -408,10 +499,12 @@ class Analyze:
                     },
                     pages,
                     ExtractionDraft,
-                    lambda p: validate_extraction(p, group, job.organization_hint),
+                    validate_facts,
                     emit,
                     schema=schema,
                 )
+            if date_reading is not None:
+                facts.warnings = list(dict.fromkeys([*facts.warnings, *date_reading.warnings]))
             return facts.facts()
         evidence = []
         for chunk in chunks:

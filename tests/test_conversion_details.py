@@ -49,12 +49,30 @@ def test_footer_is_rendered_from_pdf_at_higher_resolution(tmp_path, rotation):
             assert Path(item["thumbnail"]).is_file()
             with Image.open(item["header_preview"]) as header:
                 if rotation == 0:
-                    assert header.size == (800, 400)
-                    assert header.tobytes() == bytes([0, 255, 0]) * (800 * 400)
+                    assert header.size == (800, 480)
+                    assert header.getpixel((400, 200)) == (0, 255, 0)
+                    assert header.getpixel((400, 450)) == (255, 255, 255)
                 else:
-                    assert header.size == (1200, 267)
+                    assert header.size == (1200, 320)
                     assert [header.getpixel((x, 100)) for x in (200, 600, 1000)] == [
                         tuple(color),
                         (255, 255, 255),
                         (0, 255, 0),
                     ]
+
+
+def test_header_keeps_full_requisite_crossing_upper_third(tmp_path):
+    """Строка на границе верхней трети сохраняется целиком; PDF и обычное превью прежние."""
+    source = tmp_path / "synthetic-requisite.pdf"
+    with pymupdf.open() as document:
+        page = document.new_page(width=200, height=300)
+        # Полоса имитирует строку даты, нижняя часть которой выходила за прежний clip.
+        page.draw_rect(pymupdf.Rect(10, 94, 190, 110), fill=(0, 0, 1), color=None)
+        document.save(source)
+    original = source.read_bytes()
+    result = convert(source, tmp_path / "output", limits())
+    assert source.read_bytes() == original
+    assert len(result["pages"]) == 1
+    with Image.open(result["pages"][0]["header_preview"]) as header:
+        assert header.height > 110 * 4
+        assert all(header.getpixel((400, y * 4)) == (0, 0, 255) for y in (95, 100, 109))

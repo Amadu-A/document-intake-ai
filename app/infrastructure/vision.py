@@ -99,7 +99,7 @@ class SharedVision:
                                 {
                                     "file_id": page["file_id"],
                                     "page_number": page["page_number"],
-                                    "region": "top_third" if header else "bottom_third",
+                                    "region": "header" if header else "bottom_third",
                                     "same_physical_page": True,
                                 }
                             ),

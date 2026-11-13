@@ -49,7 +49,10 @@ async def test_real_five_pairs_comparison_matrix():
         )
     assert len(report["cases"]) == len(matrix["cases"]) > 0
     assert all(case["status"] == "match" for case in report["cases"]), (
-        "Есть ошибки или расхождения: reports/local/live-comparison.json"
+        "Есть ошибки или расхождения: reports/local/live-comparison.json; поля: "
+        + ", ".join(
+            sorted({row["field_path"] for row in report["rows"] if row["status"] != "match"})
+        )
     )
 
 

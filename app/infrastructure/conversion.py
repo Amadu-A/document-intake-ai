@@ -311,9 +311,10 @@ def convert(
         )
         footer.pil_save(footer_preview, format="PNG", compress_level=1)
         header_preview = target / f"header-{number}.png"
+        # Строка реквизитов может пересекать границу верхней трети: сохраняем нижний контекст.
         header = page.get_pixmap(
             matrix=pymupdf.Matrix(detail_scale, detail_scale),
-            clip=pymupdf.Rect(rect.x0, rect.y0, rect.x1, rect.y0 + rect.height / 3),
+            clip=pymupdf.Rect(rect.x0, rect.y0, rect.x1, rect.y0 + rect.height * 2 / 5),
             alpha=False,
         )
         header.pil_save(header_preview, format="PNG", compress_level=1)

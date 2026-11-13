@@ -1,11 +1,22 @@
 # app/domain/extraction.py
 """Внутренний ответ VLM с явной читаемостью реквизитов; публичный JSON не расширяется."""
 
+from datetime import date
 from typing import Literal
 
 from pydantic import Field
 
 from app.domain.schema import Extracted, StrictModel
+from app.domain.segmentation import PageRef
+
+
+class PrimaryDateReading(StrictModel):
+    """Независимое визуальное чтение даты основной части, без OCR и дат приложений."""
+
+    document_date: date | None
+    readability: Literal["legible", "missing", "ambiguous"]
+    source_page: PageRef | None
+    warnings: list[str]
 
 
 class PrimaryReadability(StrictModel):
@@ -21,13 +32,17 @@ class ExtractionDraft(Extracted):
 
     primary_readability: PrimaryReadability
 
-    def uncertain_handwriting(self) -> set[str]:
-        """Выбирает только рукописные поля, в неуверенности которых уже призналась VLM."""
+    def uncertain_fields(self) -> set[str]:
+        """Сохраняет явную неоднозначность и сомнительную рукопись между повторами."""
         uncertain = set(self.recognition.low_confidence_fields)
         return {
             field
-            for field in self.primary_readability.handwritten_fields
-            if uncertain.intersection({field, f"requisites.{field}"})
+            for field in ("document_number", "document_date")
+            if getattr(self.primary_readability, field) == "ambiguous"
+            or (
+                field in self.primary_readability.handwritten_fields
+                and uncertain.intersection({field, f"requisites.{field}"})
+            )
         }
 
     def facts(self) -> Extracted:

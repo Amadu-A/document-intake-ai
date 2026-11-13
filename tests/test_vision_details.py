@@ -70,7 +70,7 @@ async def test_footer_detail_keeps_pixels_and_page_identity(
         assert json.loads(content[-2]["text"]) == {
             "file_id": "source",
             "page_number": 17,
-            "region": "top_third" if stored_footer and header_requested else "bottom_third",
+            "region": "header" if stored_footer and header_requested else "bottom_third",
             "same_physical_page": True,
         }
         with Image.open(BytesIO(base64.b64decode(images[-1].split(",")[1]))) as footer:

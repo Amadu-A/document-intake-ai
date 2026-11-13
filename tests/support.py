@@ -92,6 +92,17 @@ class ScriptedVision:
         """Выдаёт заготовленный ответ либо минимальную корректную синтетическую группу."""
         self.calls.append({"prompt": prompt, "context": context, "pages": pages, "schema": schema})
         await emit("text_delta", {"text": "{synthetic stream}", "validated": False})
+        if schema.get("title") == "PrimaryDateReading" and (
+            not self.answers
+            or not isinstance(self.answers[0], dict)
+            or "readability" not in self.answers[0]
+        ):
+            return {
+                "document_date": None,
+                "readability": "missing",
+                "source_page": None,
+                "warnings": [],
+            }
         if self.answers:
             answer = self.answers.popleft()
             if isinstance(answer, Exception):

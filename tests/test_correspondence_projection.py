@@ -288,8 +288,61 @@ def test_legible_primary_fact_can_keep_low_confidence_without_public_metadata(fi
     assert "primary_readability" not in Extracted.model_json_schema()["properties"]
 
 
+@pytest.mark.parametrize("uncertain", ["document_number", "document_date"])
+async def test_retry_receives_candidate_and_keeps_independent_legible_fact(container, uncertain):
+    """Повтор исправляет одно поле с предыдущим ответом, не теряя независимый читаемый реквизит."""
+    raw = facts()
+    raw["requisites"].update(document_number="SYNTHETIC-17", document_date="2031-01-12")
+    raw["recognition"]["low_confidence_fields"] = [f"requisites.{uncertain}"]
+    raw["primary_readability"] = {
+        "document_number": "legible",
+        "document_date": "legible",
+        uncertain: "ambiguous",
+        "handwritten_fields": [uncertain],
+    }
+    original = copy.deepcopy(raw)
+    corrected = copy.deepcopy(raw)
+    corrected["requisites"][uncertain] = None
+    independent = "document_date" if uncertain == "document_number" else "document_number"
+
+    def revise(context):
+        """Проверяет наличие исходного кандидата и конкретной причины ограниченного повтора."""
+        assert context["candidate"] == original
+        assert context["candidate"]["requisites"][independent] == raw["requisites"][independent]
+        assert context["validation_errors"]
+        assert context["revision_instruction"]
+        return corrected
+
+    container.vision.answers.extend([raw, revise])
+    job = Job(
+        id="synthetic-job",
+        owner="synthetic",
+        status="running",
+        created_at=utcnow(),
+        expires_at=None,
+        sources=[],
+        prompts=container.prompts.base,
+    )
+
+    async def emit(kind, data):
+        """Не сохраняет синтетический источник и текст модели в журнале."""
+
+    result = await container.analysis._extract(
+        job, group(), [{"file_id": "source", "page_number": 1}], emit
+    )
+    assert getattr(result.requisites, uncertain) is None
+    assert result.requisites.model_dump(mode="json")[independent] == raw["requisites"][independent]
+    assert raw == original
+    assert "candidate" not in container.vision.calls[0]["context"]
+    assert not container.vision.calls[0]["context"]["validation_errors"]
+    assert len(container.vision.calls) == 2
+
+
 @pytest.mark.parametrize("field", ["document_number", "document_date"])
-async def test_retry_cannot_wash_away_declared_handwriting_uncertainty(container, field):
+@pytest.mark.parametrize("explicit_ambiguity", [False, True])
+async def test_retry_cannot_wash_away_declared_handwriting_uncertainty(
+    container, field, explicit_ambiguity
+):
     """Снятие low-confidence на повторе не разрешает ранее признанную рукописную догадку."""
     raw = facts()
     raw["requisites"][field] = "2026-01-02" if field == "document_date" else "SYNTHETIC-17"
@@ -300,11 +353,16 @@ async def test_retry_cannot_wash_away_declared_handwriting_uncertainty(container
         field: "legible",
         "handwritten_fields": [field],
     }
+    if explicit_ambiguity:
+        raw["recognition"]["low_confidence_fields"] = []
+        raw["primary_readability"][field] = "ambiguous"
     washed = copy.deepcopy(raw)
     washed["recognition"]["low_confidence_fields"] = []
+    washed["primary_readability"][field] = "legible"
     corrected = copy.deepcopy(raw)
     corrected["requisites"][field] = None
     corrected["primary_readability"][field] = "ambiguous"
+    corrected["recognition"]["low_confidence_fields"] = [f"requisites.{field}"]
     container.settings.model_attempts = 3
     container.vision.answers.extend([raw, washed, corrected])
     job = Job(
