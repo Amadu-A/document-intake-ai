@@ -62,8 +62,8 @@ class Classification(StrictModel):
         if self.is_letter != (self.document_root == DocumentRoot.LETTER):
             raise ValueError("Род и is_letter противоречат друг другу")
         if not self.is_letter or self.direction is None:
-            if self.template_path or (not self.is_letter and self.direction is not None):
-                raise ValueError("Без направления письма template_path должен быть пуст")
+            if self.template_path:
+                raise ValueError("Для неписьма или неизвестного направления template_path пуст")
             if self.is_letter:
                 allowed = [path for path in LETTER_PATHS if path[2] == self.document_kind]
                 if self.document_kind is not None and not allowed:
@@ -219,7 +219,7 @@ class Recognition(StrictModel):
 
 
 class Extracted(StrictModel):
-    """Контракт второго прохода VLM; технические идентификаторы и URLs создаёт сервер."""
+    """Проверенные факты и проекция 1С; при inference one_c — только пустая структура."""
 
     classification: Classification
     requisites: Requisites

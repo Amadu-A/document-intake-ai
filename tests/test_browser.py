@@ -56,6 +56,9 @@ async def test_real_browser_prompts_upload_sse_export_refresh(container, unused_
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
             await page.goto(base)
+            organization = page.locator("[data-organization]")
+            await expect(organization).to_have_value("")
+            await organization.fill("ООО «Браузерный тест»")
             await page.locator("[data-prompts-open]").click()
             editor = page.locator("[data-prompt-text]")
             await expect(page.locator("[data-prompts-dialog]")).to_be_visible()
@@ -98,6 +101,7 @@ async def test_real_browser_prompts_upload_sse_export_refresh(container, unused_
             await expect(page.locator("[data-page-role]")).to_contain_text("synthetic-b.pdf")
             job_id = await page.evaluate("sessionStorage.getItem('intake_job')")
             stored = await container.database.get(job_id)
+            assert stored.organization_hint == "ООО «Браузерный тест»"
             assert stored.sources[1].file_id in await page.locator("[data-original]").get_attribute(
                 "href"
             )
@@ -108,6 +112,7 @@ async def test_real_browser_prompts_upload_sse_export_refresh(container, unused_
             assert (await download.value).suggested_filename.endswith(".json")
             await page.reload()
             await expect(page.locator("[data-export]")).to_be_enabled(timeout=10000)
+            await expect(organization).to_have_value("ООО «Браузерный тест»")
             await page.locator("[data-prompts-open]").click()
             await page.locator('[data-prompt-tab="extraction"]').click()
             await expect(editor).to_have_value(second + "\nСинтетическая правка вкладки 2")

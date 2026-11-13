@@ -4,13 +4,24 @@
 import asyncio
 import base64
 import json
+from io import BytesIO
 from pathlib import Path
 
 import httpx
+from PIL import Image
 
 from app.application.ports import Emit
 from app.core.observability import timed
 from app.domain.errors import IntakeError
+
+
+def footer_view(data: bytes) -> bytes:
+    """Показывает нижнюю треть проверенного рендера отдельно, без изменения цифр и масштаба."""
+    with Image.open(BytesIO(data)) as image:
+        with image.crop((0, image.height * 2 // 3, image.width, image.height)) as detail:
+            output = BytesIO()
+            detail.save(output, format="PNG")
+            return output.getvalue()
 
 
 def strict_json(value: str) -> dict:
@@ -69,6 +80,38 @@ class SharedVision:
                     },
                 ]
             )
+            if context.get("footer_details") is True:
+                header = page.get("header_preview") and context.get("header_detail_page") == {
+                    "file_id": page["file_id"],
+                    "page_number": page["page_number"],
+                }
+                detail_path = page.get("header_preview") if header else page.get("footer_preview")
+                detail = (
+                    await asyncio.to_thread(Path(detail_path).read_bytes)
+                    if detail_path
+                    else await asyncio.to_thread(footer_view, data)
+                )
+                content.extend(
+                    [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "file_id": page["file_id"],
+                                    "page_number": page["page_number"],
+                                    "region": "top_third" if header else "bottom_third",
+                                    "same_physical_page": True,
+                                }
+                            ),
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/png;base64," + base64.b64encode(detail).decode(),
+                            },
+                        },
+                    ]
+                )
         payload = {
             "model": self.settings.shared_vlm_model,
             "messages": [

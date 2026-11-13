@@ -14,6 +14,8 @@
 .upload__file { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .upload__input:focus-within .upload__label { outline: 3px solid #6397ff; outline-offset: 3px; }
 .upload__hint, .upload__mode small { color: var(--color-muted); font-size: 11px; margin: 5px 0; }
+.upload__organization-label { display: block; margin: 12px 0 5px; color: var(--color-muted); font-size: 11px; }
+.upload__organization { width: 100%; padding: 9px 11px; border: 1px solid #aac7ff; border-radius: 9px; color: var(--color-text); background: #f9fcff; font: inherit; font-size: 12px; }
 .upload__queue { margin: 4px 0; padding-left: 18px; max-height: 72px; overflow: auto; }
 .upload__mode > p { border: 1px solid var(--color-line); padding: 12px; border-radius: 9px; background: white; margin: 7px 0 0; }
 .upload--drag { outline: 3px dashed var(--color-blue); outline-offset: 5px; }

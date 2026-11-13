@@ -13,6 +13,7 @@ export function initializeAnalysis(viewer) {
   let pollTimer = null, refreshTimer = null, raw = "", fetching = false, stopped = false;
   const start = document.querySelector("[data-start]");
   const input = document.querySelector("[data-files]");
+  const organization = document.querySelector("[data-organization]");
   const json = document.querySelector("[data-json]");
   const boundaries = createBoundaryEditor(viewer, async () => {
     while (fetching) await new Promise(resolve => setTimeout(resolve, 30));
@@ -25,6 +26,8 @@ export function initializeAnalysis(viewer) {
     document.querySelector("[data-progress]").value = data.progress;
     start.disabled = data.status !== "uploaded" || (!data.preview_complete && data.stage !== "upload") || boundaries.pending();
     input.disabled = !terminal.has(data.status);
+    organization.value = data.organization_hint || "";
+    organization.disabled = !terminal.has(data.status);
     document.querySelector("[data-cancel]").hidden = terminal.has(data.status);
     document.querySelector("[data-new-analysis]").hidden = !terminal.has(data.status);
     document.querySelector("[data-count-files]").textContent = data.sources.length;
@@ -97,12 +100,15 @@ export function initializeAnalysis(viewer) {
     start.disabled = true; document.querySelector("[data-export]").disabled = true;
     viewer.local(files[0]); notice("Загрузка оригиналов…");
     const form = new FormData(); [...files].forEach(file => form.append("files", file));
+    const organizationHint = organization.value.trim();
+    if (organizationHint) form.append("organization_hint", organizationHint);
+    organization.disabled = true;
     for (const [key, value] of Object.entries(boundaries.flags())) form.append(key, String(value));
     try {
       const nonce = Array.from(crypto.getRandomValues(new Uint8Array(24)), byte => byte.toString(16).padStart(2, "0")).join("");
       const data = await api("/api/v1/uploads", { method: "POST", body: form, headers: { "Idempotency-Key": nonce } });
       jobId = data.job_id; sessionStorage.setItem("intake_job", jobId); await state(data); connect(); poll();
-    } catch (error) { notice(error.message, true); input.disabled = false; }
+    } catch (error) { notice(error.message, true); input.disabled = false; organization.disabled = false; }
   }
   input.addEventListener("change", () => accept(input.files));
   const dropzone = document.querySelector("[data-dropzone]");

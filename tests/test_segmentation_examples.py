@@ -27,10 +27,13 @@ def test_private_segmentation_examples_cover_every_physical_page(name, pages, gr
         pytest.skip("NOT_RUN: приватные примеры недоступны")
     with pymupdf.open(path) as document:
         assert len(document) == pages
-    expected = expected_groups(path.with_suffix(".json"), pages)
+    cut = path.with_name(path.stem + "_cut.json")
+    expected = expected_groups(cut if cut.exists() else path.with_suffix(".json"), pages)
     assert len(expected) == groups
     if pages == 173:
         assert [101, 103] in expected and [102] in expected
+    else:
+        assert expected == [[1, 8], [2, 3, 4], [5, 6], [7]]
     physical = [PageRef(file_id="source", page_number=n) for n in range(1, pages + 1)]
     documents = []
     for index, group in enumerate(expected, 1):

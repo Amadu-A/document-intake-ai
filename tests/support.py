@@ -96,13 +96,35 @@ class ScriptedVision:
             answer = self.answers.popleft()
             if isinstance(answer, Exception):
                 raise answer
-            return answer(context) if callable(answer) else answer
+            value = answer(context) if callable(answer) else answer
+            if "primary_readability" in schema.get("properties", {}) and isinstance(value, dict):
+                value = self.readability(value)
+            return value
         if schema.get("title") == "Plan":
             refs = [
                 {"file_id": p["file_id"], "page_number": p["page_number"]} for p in context["pages"]
             ]
             return plan_for(refs)
-        return facts()
+        value = facts()
+        return (
+            self.readability(value)
+            if "primary_readability" in schema.get("properties", {})
+            else value
+        )
+
+    @staticmethod
+    def readability(value):
+        """Дополняет synthetic fixture служебным свидетельством, не исправляя её реквизиты."""
+        if "primary_readability" not in value and isinstance(value.get("requisites"), dict):
+            return {
+                **value,
+                "primary_readability": {
+                    field: "missing" if value["requisites"].get(field) is None else "legible"
+                    for field in ("document_number", "document_date")
+                }
+                | {"handwritten_fields": []},
+            }
+        return value
 
 
 class SyntheticOCR:

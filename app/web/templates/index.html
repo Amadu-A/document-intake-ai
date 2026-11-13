@@ -8,6 +8,9 @@
     <label class="upload__label" for="files">＋ Выберите файлы или перетащите сюда</label>
     <input class="upload__file" id="files" type="file" multiple data-files accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,.tif,.tiff">
     <p class="upload__hint">PDF, DOC, DOCX, TXT, JPG, PNG, TIFF · файл до {{ max_file_mb }} МиБ / {{ max_file_pages }} стр. · пакет до {{ max_files }} файлов / {{ max_mb }} МиБ / {{ max_pages }} стр.</p>
+    <label class="upload__organization-label" for="organization">Обслуживаемая организация · необязательно</label>
+    <input class="upload__organization" id="organization" name="organization_hint" type="text" maxlength="1000" autocomplete="organization" placeholder="Укажите организацию до загрузки файлов" aria-describedby="organization-help" data-organization>
+    <p class="upload__hint" id="organization-help">Определяет входящее/исходящее направление. Без выбора организация не угадывается по PDF.</p>
     <ul class="upload__queue" data-file-list></ul>
   </div>
   <div class="upload__mode"><strong>РЕЖИМ РАЗДЕЛЕНИЯ</strong>

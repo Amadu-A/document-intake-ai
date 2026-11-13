@@ -370,7 +370,13 @@ async def _run_case(
     deadline = monotonic() + job_timeout_seconds
     while True:
         status = await _json(client, f"/api/v1/jobs/{job_id}", headers)
-        if status["status"] in {"completed", "completed_with_warnings", "failed", "cancelled"}:
+        if status["status"] in {
+            "completed",
+            "completed_with_warnings",
+            "failed",
+            "cancelled",
+            "awaiting_confirmation",
+        }:
             break
         remaining = deadline - monotonic()
         if remaining <= 0:
@@ -379,6 +385,8 @@ async def _run_case(
     completed = status["status"] in {"completed", "completed_with_warnings"}
     _row(rows, "processing.completed", True, completed)
     await _sources(client, status, payload, case, rows)
+    if status["status"] == "awaiting_confirmation":
+        raise ComparisonFailure("segmentation_requires_review")
     if not completed:
         raise ComparisonFailure((status.get("error") or {}).get("code", "job_failed"))
     _plan_checks(status, case, rows)

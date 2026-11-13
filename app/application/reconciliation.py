@@ -5,7 +5,33 @@ from collections import Counter
 
 from app.domain.compact_plan import CompactPlan, compact, page_spans
 from app.domain.errors import IntakeError
+from app.domain.identities import identifier_key
 from app.domain.segmentation import PageRef, Plan, validate_plan
+
+
+def carrier_candidates(left: Plan, right: Plan) -> tuple[set[int], set[int], set[PageRef]]:
+    """Подбирает VLM-контекст по напечатанным идентификаторам; не меняет назначение страниц."""
+
+    def index(plan, carrier):
+        """Индексирует только типизированные свидетельства модели, без regex/OCR-эвристик."""
+        values = {}
+        roles = {"carrier"} if carrier else {"main", "continuation"}
+        for position, document in enumerate(plan.documents):
+            for evidence in document.evidence:
+                if evidence.role in roles:
+                    for identifier in evidence.identifiers:
+                        key = (identifier.kind, identifier_key(identifier.value))
+                        values.setdefault(key, []).append((position, evidence.page))
+        return values
+
+    left_groups, right_groups, refs = set(), set(), set()
+    for left_carrier in (True, False):
+        a, b = index(left, left_carrier), index(right, not left_carrier)
+        for key in a.keys() & b.keys():
+            left_groups.update(position for position, _ in a[key])
+            right_groups.update(position for position, _ in b[key])
+            refs.update(page for _, page in [*a[key], *b[key]])
+    return left_groups, right_groups, refs
 
 
 async def reconcile(analysis, job, pages: list[dict], plans: list[Plan], emit) -> Plan:
@@ -14,7 +40,7 @@ async def reconcile(analysis, job, pages: list[dict], plans: list[Plan], emit) -
     positions = {p: i for i, p in enumerate(physical)}
 
     async def pair(left: Plan, right: Plan) -> Plan:
-        """Включает соседство до пяти чужих листов; принадлежность всех групп снова решает VLM."""
+        """Показывает VLM стык и далёкие совпадения свидетельств без ограничения расстояния."""
         left_refs = {p for d in left.documents for p in d.pages}
         right_refs = {p for d in right.documents for p in d.pages}
         overlap = left_refs & right_refs
@@ -31,6 +57,10 @@ async def reconcile(analysis, job, pages: list[dict], plans: list[Plan], emit) -
             (i for i, d in enumerate(right.documents) if any(positions[p] < high for p in d.pages)),
             default=0,
         )
+        distant_left, distant_right, evidence_refs = carrier_candidates(left, right)
+        if distant_left:
+            left_start = min(left_start, min(distant_left))
+            right_end = max(right_end, max(distant_right))
         left_start = min(
             left_start,
             next((i for i, d in enumerate(left.documents) if d.status != "verified"), left_start),
@@ -46,7 +76,18 @@ async def reconcile(analysis, job, pages: list[dict], plans: list[Plan], emit) -
         refs = sorted({p for d in affected for p in d.pages}, key=positions.__getitem__)
         allowed_refs = set(refs)
         image_start = max(0, center - analysis.settings.vlm_window_pages // 2)
-        images = pages[image_start : image_start + analysis.settings.vlm_window_pages]
+        image_positions = list(
+            dict.fromkeys(
+                [
+                    *(positions[p] for p in sorted(evidence_refs, key=positions.__getitem__)),
+                    *range(
+                        image_start,
+                        min(len(pages), image_start + analysis.settings.vlm_window_pages),
+                    ),
+                ]
+            )
+        )[: analysis.settings.vlm_window_pages]
+        images = [pages[i] for i in sorted(image_positions)]
         proposals = [
             compact(
                 Plan(documents=left.documents[left_start:], unassigned_pages=[], warnings=[]),
@@ -104,7 +145,10 @@ async def reconcile(analysis, job, pages: list[dict], plans: list[Plan], emit) -
                 ],
                 "instruction": "Ты принимаешь итоговое решение на этом уровне дерева. "
                 "Согласуй все предложенные группы, продолжения и приложения. "
-                "Связанные листы могут быть перемешаны с 1–5 чужими страницами. "
+                "Связанные листы могут быть разделены произвольным числом чужих страниц. "
+                "Типизированные evidence сохранены в proposals; совпадение номера — "
+                "повод проверить связь, но не обязательное объединение. Проверь стороны "
+                "и юридическую самостоятельность документов, сохрани свидетельства. "
                 "Несмежные spans одной регистрации допустимы; "
                 "чужие страницы остаются в других группах. "
                 "Одинаковый бланк или отправитель не доказывает принадлежность одному документу. "

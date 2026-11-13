@@ -59,7 +59,8 @@ async def run_segmentation_case(
 
     with pymupdf.open(pdf) as document:
         count = len(document)
-    expected = expected_groups(pdf.with_suffix(".json"), count)
+    cut = pdf.with_name(pdf.stem + "_cut.json")
+    expected = expected_groups(cut if cut.exists() else pdf.with_suffix(".json"), count)
     began = monotonic()
     with pdf.open("rb") as stream:
         response = await client.post(

@@ -182,7 +182,7 @@ async def test_large_extraction_reconciles_at_most_four_partial_answers(containe
         assert len(context.get("window_evidence", [])) <= 4
         assert len(images) <= 8
         assert "spans" in context["group"] and "pages" not in context["group"]
-        return facts()
+        return container.vision.readability(facts())
 
     async def emit(kind, data):
         """Принимает только тестовые события."""

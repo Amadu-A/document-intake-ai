@@ -7,7 +7,7 @@ from pydantic import Field
 
 from app.domain.errors import IntakeError
 from app.domain.schema import Confidence, StrictModel
-from app.domain.segmentation import PageRef, Plan, Segment
+from app.domain.segmentation import PageEvidence, PageRef, Plan, Segment
 
 
 class Span(StrictModel):
@@ -35,6 +35,7 @@ class CompactDocument(StrictModel):
     confidence: Confidence
     reason: str = Field(min_length=1, max_length=500)
     status: Literal["verified", "needs_review"]
+    evidence: list[PageEvidence] = Field(default_factory=list, max_length=64)
 
 
 class CompactPlan(StrictModel):
@@ -69,6 +70,7 @@ class CompactPlan(StrictModel):
                     confidence=doc.confidence,
                     reason=doc.reason,
                     status=doc.status,
+                    evidence=doc.evidence,
                 )
                 for i, doc in enumerate(self.documents, 1)
             ],
@@ -110,6 +112,7 @@ def compact(plan: Plan, physical: list[PageRef]) -> dict:
                 "confidence": d.confidence,
                 "reason": d.reason,
                 "status": d.status,
+                "evidence": [e.model_dump(mode="json") for e in d.evidence],
             }
             for d in plan.documents
         ],

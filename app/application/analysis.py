@@ -3,19 +3,34 @@
 
 import asyncio
 import json
+import re
+from copy import deepcopy
 from uuid import uuid4
 
 from pydantic import ValidationError
 
-from app.application.inference_schema import extraction_schema
+from app.application.inference_schema import extraction_schema, segmentation_schema
+from app.application.one_c_projection import (
+    canonical_organization,
+    project_one_c,
+    supported_direction,
+)
 from app.application.ports import OCR, AnalysisSettings, Emit, JobRepository, Storage, Vision
 from app.application.reconciliation import reconcile
 from app.core.observability import timed
 from app.domain.boundaries import FixedGroup
-from app.domain.compact_plan import page_spans
+from app.domain.compact_plan import CompactPlan, page_spans
 from app.domain.errors import IntakeError, LeaseLost
+from app.domain.extraction import ExtractionDraft
 from app.domain.jobs import Job
-from app.domain.schema import AttachmentFile, BatchResult, Document, Extracted, SourceFile
+from app.domain.schema import (
+    AttachmentFile,
+    BatchResult,
+    Document,
+    DocumentRoot,
+    Extracted,
+    SourceFile,
+)
 from app.domain.segmentation import PageRef, Plan, Segment, validate_plan, windows
 from app.domain.taxonomy import taxonomy_json
 
@@ -37,35 +52,62 @@ def validate_extraction(
     facts: Extracted, group: Segment | FixedGroup, organization: str | None
 ) -> None:
     """Проверяет контекст направления и сохранность приложений без подмены модельных фактов."""
+    organization = canonical_organization(organization)
     if not organization and facts.classification.direction is not None:
         raise IntakeError(
             "schema_validation_failed", "Без organization_hint направление должно быть null"
         )
-    if (
-        facts.classification.is_letter
-        and facts.classification.direction is None
-        and not facts.warnings
-    ):
+    if facts.classification.direction is None and not facts.warnings:
         raise IntakeError("schema_validation_failed", "Неизвестное направление требует warning")
     if not facts.classification.is_letter and not facts.warnings:
         raise IntakeError(
             "schema_validation_failed", "Предварительный вид неписьма требует warning"
         )
-    if facts.one_c.form is not None or facts.one_c.received_via is not None:
+    if any(getattr(facts.one_c, field) is not None for field in type(facts.one_c).model_fields):
         raise IntakeError(
-            "schema_validation_failed", "Форма хранения и способ получения 1С не заданы контекстом"
+            "schema_validation_failed", "Поля one_c формирует backend; VLM должна вернуть все null"
+        )
+    if facts.classification.direction is not None and (
+        facts.classification.direction != supported_direction(facts.requisites, organization)
+    ):
+        raise IntakeError(
+            "schema_validation_failed",
+            "Направление противоречит сторонам документа или не подтверждено обслуживаемой "
+            "организацией. Уточни sender/recipient по изображению; при конфликте direction=null "
+            "и предупреждение, не меняй юридический род документа.",
         )
     if facts.requisites.delivery_channel not in {None, "unknown"}:
         raise IntakeError("schema_validation_failed", "Способ доставки не задан входным контекстом")
-    if not organization and facts.one_c.organization is not None:
-        raise IntakeError("schema_validation_failed", "Организация 1С неизвестна без контекста")
-    path = facts.classification.template_path
-    leaf = facts.one_c.template_leaf
-    view = facts.one_c.view_of_document
-    if (leaf is not None and (not path or leaf != path[-1])) or (
-        view is not None and (not path or view != path[1])
+    if facts.classification.document_root == DocumentRoot.PROCEDURAL and any(
+        amount.type.casefold().replace("_", " ").strip()
+        in {"fine", "штраф", "administrative fine", "административный штраф"}
+        for amount in facts.requisites.amounts
     ):
-        raise IntakeError("schema_validation_failed", "Поля шаблона 1С противоречат классификации")
+        raise IntakeError(
+            "schema_validation_failed",
+            "В процессуальном документе тип fine/штраф без контекста недостаточен. "
+            "Уточни по источнику, относится ли сумма к действующему постановлению или "
+            "к прекращённому/отменённому делу, и явно отрази это в amounts[].type. "
+            "Не определяй исход по умолчанию и не меняй сумму.",
+        )
+    if isinstance(facts, ExtractionDraft):
+        for field in ("document_number", "document_date"):
+            path = f"requisites.{field}"
+            reading = getattr(facts.primary_readability, field)
+            value = getattr(facts.requisites, field)
+            uncertain = set(facts.recognition.low_confidence_fields)
+            if (reading == "legible") != (value is not None) or (
+                reading == "ambiguous"
+                and (not uncertain.intersection({field, path}) or not facts.warnings)
+            ):
+                raise IntakeError(
+                    "schema_validation_failed",
+                    f"{path} противоречит primary_readability={reading}. "
+                    "Перепроверь изображение: legible — однозначно читаемое значение; "
+                    "missing — null; ambiguous — null, warning и путь в low_confidence_fields. "
+                    "Низкая уверенность сама по себе не означает неоднозначность. "
+                    "Не подставляй вероятный вариант из OCR.",
+                )
     primary = group.pages[0].file_id
     if isinstance(group, FixedGroup):
         allowed = {p.page_number for p in group.pages if p.file_id == primary}
@@ -128,16 +170,48 @@ class Analyze:
         """Повторяет запрос с обратной связью; уточнённая схема не заменяет серверную проверку."""
         feedback = []
         last_code = "schema_validation_failed"
+        uncertain_handwriting = set()
+        if model is ExtractionDraft and context.get("candidate"):
+            uncertain_handwriting.update(
+                ExtractionDraft.model_validate(context["candidate"]).uncertain_handwriting()
+            )
+        if schema is None and model in {Plan, CompactPlan}:
+            schema = segmentation_schema(model)
         for attempt in range(1, self.settings.model_attempts + 1):
             try:
+                request_schema = model.model_json_schema() if schema is None else schema
+                if uncertain_handwriting:
+                    request_schema = deepcopy(request_schema)
+                    for field in uncertain_handwriting:
+                        request_schema["$defs"]["Requisites"]["properties"][field] = {
+                            "type": "null"
+                        }
+                        request_schema["$defs"]["PrimaryReadability"]["properties"][field] = {
+                            "type": "string",
+                            "enum": ["ambiguous"],
+                        }
                 raw = await self.vision.request(
                     prompt,
                     {**context, "validation_errors": feedback},
                     pages,
-                    model.model_json_schema() if schema is None else schema,
+                    request_schema,
                     emit,
                 )
                 parsed = model.model_validate(raw)
+                if isinstance(parsed, ExtractionDraft):
+                    uncertain_handwriting.update(parsed.uncertain_handwriting())
+                    if any(
+                        getattr(parsed.requisites, field) is not None
+                        or getattr(parsed.primary_readability, field) != "ambiguous"
+                        for field in uncertain_handwriting
+                    ):
+                        raise IntakeError(
+                            "schema_validation_failed",
+                            "VLM отметила сомнение в рукописных реквизитах "
+                            f"{sorted(uncertain_handwriting)}. Верни для них null, ambiguous, "
+                            "warning и путь в low_confidence_fields. Повтор без нового "
+                            "источника не должен превращать уже отмеченное сомнение в факт.",
+                        )
                 validate(parsed)
                 return parsed
             except ValidationError as exc:
@@ -173,7 +247,7 @@ class Analyze:
                     "window_count": len(chunks),
                     "instruction": "Границы окна могут продолжаться за его пределами. "
                     "Сейчас распределяй только страницы данного окна; итог решается отдельно. "
-                    "Связанные листы могут быть разделены 1–5 чужими страницами. "
+                    "Связанные листы могут быть разделены произвольным числом чужих страниц. "
                     "Состав одной регистрации может быть несмежным; чужие листы не включай в неё. "
                     "Одинаковая форма уведомлений сама по себе не объединяет разные уведомления. "
                     "reason — одно короткое предложение; сомнительные границы — needs_review.",
@@ -220,22 +294,39 @@ class Analyze:
         self, job: Job, group: Segment | FixedGroup, pages: list[dict], emit: Emit
     ) -> Extracted:
         """Извлекает факты всей группы; большие комплекты согласует повторным VLM-проходом."""
-        schema = extraction_schema(job.organization_hint)
+        organization = canonical_organization(job.organization_hint)
+        schema = extraction_schema(organization)
+        first_main = next(
+            (e.page for e in getattr(group, "evidence", []) if e.role == "main"),
+            next(iter(group.main_pages or group.pages)),
+        )
         context = {
-            "organization_hint": job.organization_hint,
+            "organization_hint": organization,
+            "footer_details": True,
+            "header_detail_page": first_main.model_dump() if len(group.pages) > 1 else None,
             "catalog": json.loads(taxonomy_json()),
             "group": group.model_dump(mode="json"),
             "rules": "attachment_file создаёт backend и в ответ его не включать. "
-            "Вид/подвид при известном направлении равны узлам template_path. "
+            "Только для писем вид/подвид при известном направлении равны узлам template_path. "
             "Без контекста организации direction=null, template_path=[], warning. "
+            "Направление независимо от is_letter: у повестки, решения, постановления "
+            "возможно incoming/outgoing при подтверждённой организации, но род остаётся "
+            "юридическим, template_path=[]; one_c ВСЕ поля null, их формирует backend. "
+            "При конфликте организации с sender/recipient — direction=null и warning. "
             "Неписьма имеют предварительный вид и warning. Неизвестный способ получения "
             "и форма хранения — null. Не вычисляй внутренние номера/статусы 1С. "
             "Неизвестное направление не меняет род письма: оно остаётся перепиской. "
             "Определи сам документ, а не род упомянутого в нём договора или приложения. "
+            "Конверт/адресный оборот в main_pages — технический носитель, не юридический род; "
+            "определи род по содержательному вложению (evidence.role=main/continuation). "
             "Номер и дата документа относятся к основной части group.main_pages; "
             "номера/даты связанных документов сохраняются в related_entities/attachments. "
             "При расхождении OCR с изображением проверяй оригинальное изображение. "
-            "Нечитаемое значение оставь null с предупреждением.",
+            "Нечитаемое значение оставь null с предупреждением. "
+            "Проверь requisites.response_required отдельно от пустого one_c: для "
+            "решения о прекращении производства без запроса письменного ответа — false; "
+            "для повестки/постановления об удержании без установленного запроса — null; "
+            "true только при явно требуемом письменном ответе.",
         }
         if isinstance(group, FixedGroup):
             context["rules"] += (
@@ -267,15 +358,61 @@ class Analyze:
             )
         chunks = windows(pages, self.settings.vlm_window_pages, self.settings.vlm_overlap_pages)
         if len(chunks) == 1:
-            return await self._validated(
+            facts = await self._validated(
                 job.prompts["extraction"],
                 {**context, "pages": page_context(pages)},
                 pages,
-                Extracted,
+                ExtractionDraft,
                 lambda p: validate_extraction(p, group, job.organization_hint),
                 emit,
                 schema=schema,
             )
+            # Метки OCR лишь указывают, что нужно ещё раз посмотреть изображение;
+            # значения не копируются из OCR и не вычисляются backend.
+            ocr_text = " ".join(p.get("ocr", "") for p in pages).upper()
+            missing = [
+                f"requisites.sender.{field}"
+                for field, label in (("inn", "ИНН"), ("kpp", "КПП"), ("ogrn", "ОГРН"))
+                if facts.classification.is_letter
+                and getattr(facts.requisites.sender, field) is None
+                and label in ocr_text
+            ]
+            if (
+                facts.classification.is_letter
+                and not facts.requisites.related_entities.invoices
+                and re.search(r"\bСЧ[ЕЁ]Т(?:А|У)?\s*№", ocr_text)
+            ):
+                missing.append("requisites.related_entities.invoices")
+            if not facts.classification.is_letter and facts.requisites.related_entities.court_cases:
+                missing.append("requisites.related_entities.court_cases[].date")
+            if missing:
+                facts = await self._validated(
+                    job.prompts["extraction"],
+                    {
+                        **context,
+                        "pages": page_context(pages),
+                        "candidate": facts.model_dump(mode="json"),
+                        "verification_fields": missing,
+                        "instruction": "Одна дополнительная проверка полноты поисковых реквизитов. "
+                        "Метки OCR не доказывают значение или принадлежность отправителю. "
+                        "Перечитай бланк, фрагменты и ссылки по изображению; каждый реквизит "
+                        "независимо. Отличай банковский счёт от счёта на оплату: банк не попадает "
+                        "в related_entities.invoices. Верни полный JSON: "
+                        "достоверные факты сохрани, "
+                        "связанные судебные даты проверь по каждому номеру отдельно: "
+                        "дату судебного приказа не теряй, а дату текущего постановления/"
+                        "заседания не переноси в дату дела или исполнительного производства "
+                        "без явного указания в источнике. "
+                        "неоднозначные оставь null с warning/low_confidence_fields. "
+                        "Не подставляй реквизиты получателя или другого документа.",
+                    },
+                    pages,
+                    ExtractionDraft,
+                    lambda p: validate_extraction(p, group, job.organization_hint),
+                    emit,
+                    schema=schema,
+                )
+            return facts.facts()
         evidence = []
         for chunk in chunks:
             partial = await self._validated(
@@ -287,7 +424,7 @@ class Analyze:
                     "не выдавай недоступные факты. Итог будет согласован отдельно.",
                 },
                 chunk,
-                Extracted,
+                ExtractionDraft,
                 lambda _: None,
                 emit,
                 schema=schema,
@@ -315,14 +452,14 @@ class Analyze:
                         "Не меняй утверждённые регистрационные границы.",
                     },
                     [],
-                    Extracted,
+                    ExtractionDraft,
                     lambda _: None,
                     emit,
                     schema=schema,
                 )
                 reduced.append({"facts": partial.model_dump(mode="json")})
             evidence = reduced
-        return await self._validated(
+        result = await self._validated(
             job.prompts["extraction"],
             {
                 **context,
@@ -331,11 +468,12 @@ class Analyze:
                 "сохрани конфликты в warnings и все приложения проверенного плана.",
             },
             [],
-            Extracted,
+            ExtractionDraft,
             lambda p: validate_extraction(p, group, job.organization_hint),
             emit,
             schema=schema,
         )
+        return result.facts()
 
     async def _prepared(self, job: Job, emit: Emit) -> Job:
         """Продолжает с durable preview checkpoint и не конвертирует готовый пакет повторно."""
@@ -486,6 +624,7 @@ class Analyze:
                 )
                 selected = [lookup[(p.file_id, p.page_number)] for p in group.pages]
                 facts = await self._extract(job, group, selected, emit)
+                facts.one_c = project_one_c(facts, job.organization_hint)
                 facts.recognition.ocr_engine = "docling"
                 facts.warnings.extend(plan_warnings)
                 if manifest["excluded_pages"]:

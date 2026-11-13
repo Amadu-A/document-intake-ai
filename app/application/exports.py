@@ -175,6 +175,7 @@ class Exports:
             "expires_at": job.expires_at,
             "cursor": job.cursor,
             "error": job.error,
+            "organization_hint": job.organization_hint,
             "segmentation_fallback": job.manifest.get("segmentation_fallback"),
             "sources": sources,
             "pages": pages,

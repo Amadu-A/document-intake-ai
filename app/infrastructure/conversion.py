@@ -294,16 +294,35 @@ def convert(
         scale = settings["render_side"] / max(rect.width, rect.height)
         preview = target / f"page-{number}.png"
         pixmap = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
-        pixmap.save(preview)
+        # PNG остаётся без потерь; быстрое сжатие экономит CPU при подготовке больших пачек.
+        pixmap.pil_save(preview, format="PNG", compress_level=1)
         thumbnail = target / f"thumb-{number}.png"
         small = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
         small.thumbnail((180, 180), Image.Resampling.LANCZOS)
         small.save(thumbnail)
         small.close()
+        # Отдельный фрагмент из PDF сохраняет мелкие цифры, потерянные в UI-превью.
+        footer_preview = target / f"footer-{number}.png"
+        detail_scale = min(settings["render_side"] * 1.5, 2400) / max(rect.width, rect.height)
+        footer = page.get_pixmap(
+            matrix=pymupdf.Matrix(detail_scale, detail_scale),
+            clip=pymupdf.Rect(rect.x0, rect.y0 + rect.height * 2 / 3, rect.x1, rect.y1),
+            alpha=False,
+        )
+        footer.pil_save(footer_preview, format="PNG", compress_level=1)
+        header_preview = target / f"header-{number}.png"
+        header = page.get_pixmap(
+            matrix=pymupdf.Matrix(detail_scale, detail_scale),
+            clip=pymupdf.Rect(rect.x0, rect.y0, rect.x1, rect.y0 + rect.height / 3),
+            alpha=False,
+        )
+        header.pil_save(header_preview, format="PNG", compress_level=1)
         item = {
             "page_number": number,
             "preview": str(preview),
             "thumbnail": str(thumbnail),
+            "footer_preview": str(footer_preview),
+            "header_preview": str(header_preview),
             "pdf": str(output),
         }
         pages.append(item)

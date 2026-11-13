@@ -14,7 +14,7 @@ class Prompts:
     def __init__(self, repository: PromptRepository, directory: Path) -> None:
         """Подключает repository и каталог утверждённых промптов при сборке приложения."""
         self.repository = repository
-        self.versions = {"segmentation": "v2", "extraction": "v1"}
+        self.versions = {"segmentation": "v3", "extraction": "v2"}
         self.base = {
             stage: (directory / f"{stage}-{self.versions[stage]}.txt").read_text("utf-8")
             for stage in ("segmentation", "extraction")

@@ -1,6 +1,8 @@
 # tests/test_inference_schema.py
 """Схема генерации ограничивает VLM контекстом, не меняя JSON 1.0 или серверные проверки."""
 
+import json
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -8,10 +10,17 @@ import pytest
 from app.application.inference_schema import extraction_schema
 from app.domain.errors import IntakeError
 from app.domain.jobs import Job, utcnow
-from app.domain.schema import DocumentRoot, Extracted
+from app.domain.schema import BatchResult, DocumentRoot, Extracted
 from app.domain.segmentation import Plan, windows
 from app.domain.taxonomy import LETTER_PATHS
 from tests.support import facts, plan_for
+
+
+def test_public_json_10_schema_keeps_versioned_contract():
+    """Внутренние свидетельства не добавляют поля и не меняют типы утверждённого экспорта."""
+    assert BatchResult.model_json_schema() == json.loads(
+        Path("docs/result-v1.schema.json").read_text("utf-8")
+    )
 
 
 def test_no_organization_schema_restricts_context_and_keeps_public_schema():
@@ -50,7 +59,10 @@ def test_letter_schema_uses_only_catalog_and_nonletter_keeps_preliminary_kind():
     assert other["properties"]["is_letter"]["const"] is False
     assert DocumentRoot.LETTER.value not in other["properties"]["document_root"]["enum"]
     assert "enum" not in other["properties"]["document_kind"]
-    assert "anyOf" in schema["$defs"]["OneC"]["properties"]["organization"]
+    assert "anyOf" in other["properties"]["direction"]
+    assert all(
+        value == {"type": "null"} for value in schema["$defs"]["OneC"]["properties"].values()
+    )
 
 
 def test_inference_schema_requires_all_fields_without_changing_nullable_types():
@@ -72,6 +84,10 @@ def test_inference_schema_requires_all_fields_without_changing_nullable_types():
     assert requisites["items"]["type"] == "array"
     assert "contracts" in schema["$defs"]["RelatedEntities"]["required"]
     assert "items" in schema["$defs"]["Requisites"]["required"]
+    empty, span = schema["$defs"]["Attachment"]["properties"]["page_range"]["anyOf"]
+    assert empty["maxItems"] == 0
+    assert span["minItems"] == span["maxItems"] == 2
+    assert span["items"]["minimum"] == 1
 
 
 @pytest.mark.parametrize("page_count", [1, 17], ids=["single-window", "windows-and-final"])

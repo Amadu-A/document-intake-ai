@@ -223,7 +223,7 @@ async def test_invalid_segmentation_becomes_reviewable_pages_without_extraction(
     completed = await container.database.get(identifier)
     assert completed.status == "completed_with_warnings"
     assert len(completed.manifest["documents"]) == 3
-    assert all(call["schema"]["title"] == "Extracted" for call in container.vision.calls)
+    assert all(call["schema"]["title"] == "ExtractionDraft" for call in container.vision.calls)
 
 
 async def test_segmentation_time_budget_and_review_do_not_require_docling(client, container):
