@@ -1,0 +1,252 @@
+# tests/test_related_dates.py
+"""Роли связанных дат, буквальные цитаты и ограниченная независимая VLM-проверка."""
+
+import copy
+from datetime import date
+
+import pytest
+
+from app.application.related_dates import review_court_dates
+from app.domain.errors import IntakeError
+from app.domain.extraction import ExtractionDraft
+from app.domain.related_dates import (
+    RelatedDatesReading,
+    contains_number,
+    literal_date,
+    validate_related_dates,
+)
+from app.domain.segmentation import PageRef
+from tests.support import ScriptedVision, facts
+
+PAGE = PageRef(file_id="source", page_number=1)
+
+
+def evidence():
+    """Создаёт синтетическую связь номера акта с собственной датой."""
+    return {
+        "index": 0,
+        "reference_kind": "court_act",
+        "date": "2031-01-12",
+        "readability": "legible",
+        "date_role": "document_date",
+        "date_literal": "12.01.2031",
+        "source_quote": "Судебный акт №ACT-1/2031 от 12.01.2031",
+        "source_page": PAGE.model_dump(),
+        "warnings": [],
+    }
+
+
+def checked(value):
+    """Проверяет один источник, не выполняя OCR и не выбирая другую дату."""
+    result = RelatedDatesReading.model_validate({"readings": [value]})
+    validate_related_dates(result, {0: "ACT-1/2031"}, {PAGE})
+    return result
+
+
+@pytest.mark.parametrize(
+    "text", ["12.01.2031", "12/01/2031", "12-01-2031", "2031-01-12", "12 января 2031 года"]
+)
+def test_literal_normalization_only_checks_the_date_selected_by_vlm(text):
+    """Разные буквальные оформления проверяются без эвристического выбора роли даты."""
+    assert literal_date(text) == date(2031, 1, 12)
+
+
+@pytest.mark.parametrize("text", ["31.02.2031", "12.13.2031", "12.01.31", "неизвестно"])
+def test_invalid_or_incomplete_literal_cannot_confirm_a_date(text):
+    """Невалидная календарная дата и неподтверждённый век не становятся ISO-датой."""
+    assert literal_date(text) is None
+
+
+def test_number_marker_and_spacing_do_not_hide_or_replace_identifier():
+    """Маркер № без пробела и типографский дефис допустимы, похожие идентификаторы — нет."""
+    assert contains_number("№ACT-1/2031 от ...", "ACT-1/2031")
+    assert contains_number("№ ACT — 1 / 2031 от ...", "ACT-1/2031")
+    assert not contains_number("ACT-10/2031", "ACT-1/2031")
+    assert not contains_number("ACT-O/2031", "ACT-0/2031")
+
+
+@pytest.mark.parametrize(
+    "role", ["entry_into_force", "copy_issued", "hearing_date", "current_document_date"]
+)
+def test_other_event_date_cannot_become_the_date_of_the_act(role):
+    """Даже правильные номер/цитата не разрешают подменить собственную дату другим событием."""
+    value = evidence()
+    value.update(date="2030-01-01", date_literal="01.01.2030", date_role=role)
+    value["source_quote"] = "Акт №ACT-1/2031 вступил в силу 01.01.2030"
+    original = copy.deepcopy(value)
+    with pytest.raises(IntakeError):
+        checked(value)
+    assert value == original
+
+
+def test_chronological_contradiction_does_not_change_the_printed_date():
+    """Дата вступления в силу раньше даты акта не даёт backend права исправлять источник."""
+    value = evidence()
+    value["source_quote"] += ", вступил в силу 01.01.2030"
+    assert checked(value).readings[0].date == date(2031, 1, 12)
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "foreign_page",
+        "no_page",
+        "wrong_number",
+        "no_literal",
+        "wrong_literal",
+        "wrong_value",
+        "ambiguous_value",
+    ],
+)
+def test_inconsistent_evidence_is_rejected(problem):
+    """Страница, номер, буквальная дата, значение и читаемость проверяются независимо."""
+    value = evidence()
+    if problem == "foreign_page":
+        value["source_page"]["file_id"] = "foreign"
+    elif problem == "no_page":
+        value["source_page"] = None
+    elif problem == "wrong_number":
+        value["source_quote"] = "Акт №ACT-10/2031 от 12.01.2031"
+    elif problem == "no_literal":
+        value["date_literal"] = None
+    elif problem == "wrong_literal":
+        value["date_literal"] = "13.01.2031"
+    elif problem == "wrong_value":
+        value["date"] = "2031-01-13"
+    else:
+        value["readability"] = "ambiguous"
+    with pytest.raises(IntakeError):
+        checked(value)
+
+
+@pytest.mark.parametrize("indices", [[0, 0], [1], []])
+def test_lost_duplicate_or_unknown_reference_index_is_rejected(indices):
+    """Ни одна запрошенная ссылка не теряется и не заменяется соседней."""
+    entries = [{**evidence(), "index": index} for index in indices]
+    with pytest.raises(IntakeError):
+        validate_related_dates(
+            RelatedDatesReading.model_validate({"readings": entries}), {0: "ACT-1/2031"}, {PAGE}
+        )
+
+
+def draft(value=None):
+    """Подготавливает только синтетические факты с ошибочно привязанной старой датой."""
+    raw = facts()
+    raw["requisites"]["related_entities"]["court_cases"] = [
+        {"number": "ACT-1/2031", "date": value, "type": "Судебный акт"}
+    ]
+    return ExtractionDraft.model_validate(ScriptedVision.readability(raw))
+
+
+async def test_verified_vlm_date_updates_summary_but_preserves_other_facts(container):
+    """Дату и уточнение summary возвращает VLM; прочие реквизиты backend не регенерирует."""
+    original = draft("2030-01-01")
+    original.requisites.summary = "Акт от 01.01.2030; удержание 50%."
+    before = original.model_dump(mode="json")
+    container.vision.answers.extend(
+        [
+            {"readings": [evidence()]},
+            {"summary": "Акт от 12.01.2031; удержание 50%.", "warnings": []},
+        ]
+    )
+
+    async def emit(kind, data):
+        """Не выводит тестовый источник в обычный журнал."""
+
+    result = await review_court_dates(
+        original,
+        [{**PAGE.model_dump(), "ocr": "UNTRUSTED_DATE"}],
+        PAGE,
+        "Синтетический prompt",
+        container.analysis._validated,
+        emit,
+    )
+    assert result.requisites.related_entities.court_cases[0].date == date(2031, 1, 12)
+    assert result.requisites.summary == "Акт от 12.01.2031; удержание 50%."
+    assert result.requisites.document_date == original.requisites.document_date
+    assert result.requisites.amounts == original.requisites.amounts
+    assert original.model_dump(mode="json") == before
+    first, summary = container.vision.calls
+    assert "2030-01-01" not in str(first["context"])
+    assert "UNTRUSTED_DATE" not in str(first["context"]) + str(first["pages"])
+    assert summary["pages"] == []
+    assert summary["schema"]["title"] == "RelatedDateSummary"
+    assert "source_quote" not in result.facts().model_dump()
+
+
+async def test_reference_batches_are_bounded_without_a_limit_on_the_total(container):
+    """Двадцать пять ссылок проходят тремя порциями без потерь; unknown остаётся null."""
+    original = draft()
+    ref = original.requisites.related_entities.court_cases[0]
+    original.requisites.related_entities.court_cases = [
+        ref.model_copy(update={"number": f"SYNTHETIC-{i}"}) for i in range(25)
+    ]
+
+    async def emit(kind, data):
+        """Не сохраняет синтетический поток."""
+
+    result = await review_court_dates(
+        original,
+        [PAGE.model_dump()],
+        PAGE,
+        "Синтетический prompt",
+        container.analysis._validated,
+        emit,
+    )
+    assert len(result.requisites.related_entities.court_cases) == 25
+    assert all(ref.date is None for ref in result.requisites.related_entities.court_cases)
+    assert [len(call["context"]["references"]) for call in container.vision.calls] == [12, 12, 1]
+
+
+@pytest.mark.parametrize("status", ["missing", "ambiguous"])
+async def test_unknown_related_date_stays_null_with_vlm_warning(container, status):
+    """Сомнительную дату не сохраняют из первого ответа; предупреждение и путь остаются честными."""
+    original = draft("2030-01-01")
+    value = evidence()
+    value.update(
+        date=None,
+        readability=status,
+        date_role="not_stated",
+        date_literal=None,
+        source_quote=None,
+        source_page=None,
+        warnings=["Дата не установлена по источнику"],
+    )
+    container.vision.answers.append({"readings": [value]})
+
+    async def emit(kind, data):
+        """Не выводит синтетические реквизиты."""
+
+    result = await review_court_dates(
+        original,
+        [PAGE.model_dump()],
+        PAGE,
+        "Синтетический prompt",
+        container.analysis._validated,
+        emit,
+    )
+    assert result.requisites.related_entities.court_cases[0].date is None
+    assert value["warnings"][0] in result.warnings
+    path = "requisites.related_entities.court_cases.0.date"
+    assert (path in result.recognition.low_confidence_fields) == (status == "ambiguous")
+
+
+async def test_unchanged_dates_do_not_regenerate_summary(container):
+    """Проверка связки не переписывает уже согласованные даты и остальное краткое содержание."""
+    original = draft("2031-01-12")
+    original.requisites.summary = "Сохранить удержание 50% и остальные факты."
+    container.vision.answers.append({"readings": [evidence()]})
+
+    async def emit(kind, data):
+        """Не публикует синтетический поток."""
+
+    result = await review_court_dates(
+        original,
+        [PAGE.model_dump()],
+        PAGE,
+        "Синтетический prompt",
+        container.analysis._validated,
+        emit,
+    )
+    assert result.requisites.summary == original.requisites.summary
+    assert len(container.vision.calls) == 1

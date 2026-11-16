@@ -3,12 +3,14 @@
 
 import hashlib
 from pathlib import Path
+from threading import get_ident
 
 import pymupdf
 import pytest
 from PIL import Image
 
 from app.infrastructure.conversion import convert
+from tests.support import pdf_bytes
 from tests.test_conversion import limits
 
 
@@ -76,3 +78,46 @@ def test_header_keeps_full_requisite_crossing_upper_third(tmp_path):
     with Image.open(result["pages"][0]["header_preview"]) as header:
         assert header.height > 110 * 4
         assert all(header.getpixel((400, y * 4)) == (0, 0, 255) for y in (95, 100, 109))
+
+
+def test_progress_publishes_complete_pngs_and_mupdf_stays_in_main_thread(tmp_path, monkeypatch):
+    """Page-ready означает четыре читаемых PNG; PyMuPDF не вызывается потоками сжатия."""
+    source = tmp_path / "synthetic.pdf"
+    source.write_bytes(pdf_bytes(3))
+    main_thread, ready = get_ident(), []
+    original = pymupdf.Page.get_pixmap
+
+    def render(page, *args, **kwargs):
+        """Отклоняет небезопасное обращение к PyMuPDF из encoder-потока."""
+        assert get_ident() == main_thread
+        return original(page, *args, **kwargs)
+
+    def progress(kind, data):
+        """Проверяет файлы в момент публикации, когда клиент уже вправе их скачать."""
+        if kind == "page_ready":
+            for key in ("preview", "thumbnail", "header_preview", "footer_preview"):
+                with Image.open(data[key]) as image:
+                    image.verify()
+            ready.append(data["page_number"])
+
+    monkeypatch.setattr(pymupdf.Page, "get_pixmap", render)
+    convert(source, tmp_path / "output", limits(), progress)
+    assert ready == [1, 2, 3]
+
+
+def test_encoder_failure_cannot_publish_an_incomplete_page(tmp_path, monkeypatch):
+    """Ошибка фонового PNG-кодирования прерывает подготовку до события готовности страницы."""
+    source = tmp_path / "synthetic.pdf"
+    source.write_bytes(pdf_bytes())
+    original, events = Image.Image.save, []
+
+    def save(image, target, *args, **kwargs):
+        """Имитирует отказ записи только детального PNG, сохраняя остальные настоящие файлы."""
+        if Path(target).name.startswith("header-"):
+            raise OSError("Синтетическая ошибка записи PNG")
+        return original(image, target, *args, **kwargs)
+
+    monkeypatch.setattr(Image.Image, "save", save)
+    with pytest.raises(OSError, match="Синтетическая ошибка"):
+        convert(source, tmp_path / "output", limits(), lambda kind, data: events.append(kind))
+    assert "source_discovered" in events and "page_ready" not in events

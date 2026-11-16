@@ -17,6 +17,15 @@ import pymupdf
 from app.domain.schema import BatchResult
 
 
+def mismatch_paths(checks: list[dict]) -> str:
+    """Показывает только страницы и пути ошибок, не реквизиты/цитаты/подписанные URL."""
+    return ", ".join(
+        f"{row['pages'] if row['pages'] is not None else 'пакет'}: {row['field']}"
+        for row in checks
+        if not row["match"]
+    )
+
+
 def summary_dates(value: str | None) -> set[str]:
     """Сравнивает факты дат в summary без требования одного русского/ISO оформления."""
     text = (value or "").casefold()

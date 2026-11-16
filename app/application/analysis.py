@@ -17,6 +17,7 @@ from app.application.one_c_projection import (
 )
 from app.application.ports import OCR, AnalysisSettings, Emit, JobRepository, Storage, Vision
 from app.application.reconciliation import reconcile
+from app.application.related_dates import review_court_dates
 from app.core.observability import timed
 from app.domain.boundaries import FixedGroup
 from app.domain.compact_plan import CompactPlan, page_spans
@@ -474,8 +475,6 @@ class Analyze:
                 and re.search(r"\bСЧ[ЕЁ]Т(?:А|У)?\s*№", ocr_text)
             ):
                 missing.append("requisites.related_entities.invoices")
-            if not facts.classification.is_letter and facts.requisites.related_entities.court_cases:
-                missing.append("requisites.related_entities.court_cases[].date")
             if missing:
                 facts = await self._validated(
                     job.prompts["extraction"],
@@ -505,6 +504,10 @@ class Analyze:
                 )
             if date_reading is not None:
                 facts.warnings = list(dict.fromkeys([*facts.warnings, *date_reading.warnings]))
+            if facts.requisites.related_entities.court_cases:
+                facts = await review_court_dates(
+                    facts, pages, first_main, job.prompts["extraction"], self._validated, emit
+                )
             return facts.facts()
         evidence = []
         for chunk in chunks:

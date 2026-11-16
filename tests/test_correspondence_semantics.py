@@ -6,8 +6,37 @@ import copy
 import pytest
 
 from app.application.one_c_projection import project_one_c
-from tests.correspondence_support import compare_correspondence, summary_dates, summary_times
+from tests.correspondence_support import (
+    compare_correspondence,
+    mismatch_paths,
+    summary_dates,
+    summary_times,
+)
 from tests.test_correspondence_projection import ORGANIZATION, procedural
+
+
+def test_error_diagnostics_include_paths_and_pages_without_private_values():
+    """Неудачный live-тест не раскрывает реальные реквизиты через pytest assertion repr."""
+    message = mismatch_paths(
+        [
+            {
+                "pages": [2, 3, 4],
+                "field": "court_cases[0].date",
+                "match": False,
+                "expected": "PRIVATE_EXPECTED",
+                "actual": "PRIVATE_ACTUAL",
+            },
+            {
+                "pages": [7],
+                "field": "requisites.document_number",
+                "match": True,
+                "expected": "PRIVATE_NUMBER",
+                "actual": "PRIVATE_NUMBER",
+            },
+        ]
+    )
+    assert "[2, 3, 4]" in message and "court_cases[0].date" in message
+    assert "PRIVATE" not in message and "document_number" not in message
 
 
 @pytest.mark.parametrize("text", ["12.01.2031", "2031-01-12", "12 января 2031 года"])

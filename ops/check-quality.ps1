@@ -14,7 +14,8 @@ if ($Browser) { Invoke-Checked 'uv' @('run', '--frozen', 'playwright', 'install'
 Invoke-Checked 'uv' @('run', '--frozen', 'ruff', 'check', '.')
 Invoke-Checked 'uv' @('run', '--frozen', 'ruff', 'format', '--check', '.')
 Invoke-Checked 'git' @('diff', '--check')
-$pytestArguments = @('run', '--frozen', 'pytest', '--cov=app', '--cov-report=term-missing')
+# Полный прогон не требует pytest-кеша, который может принадлежать другому запуску/пользователю.
+$pytestArguments = @('run', '--frozen', 'pytest', '-p', 'no:cacheprovider', '--cov=app', '--cov-report=term-missing')
 if ($Live) { $pytestArguments += '--live' }
 if ($Browser) { $pytestArguments += '--browser' }
 Invoke-Checked 'uv' $pytestArguments

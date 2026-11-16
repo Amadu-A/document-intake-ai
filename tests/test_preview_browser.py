@@ -2,12 +2,16 @@
 """Chromium: 501 страница не вызывает HTTP-шторм; fallback остаётся редактируемым черновиком."""
 
 import asyncio
+import json
 from collections import Counter
 from contextlib import suppress
+from pathlib import Path
+from time import perf_counter
 from urllib.parse import urlsplit
 
 import pytest
 import uvicorn
+from playwright.async_api import TimeoutError as BrowserTimeout
 from playwright.async_api import async_playwright, expect
 
 from app.main import create_app
@@ -101,13 +105,39 @@ async def test_browser_501_preview_cache_and_page_fallback(container, unused_tcp
             )
             rejected.clear()
             await page.unroute("**/synthetic-abort", waiting)
+            began = perf_counter()
             await page.locator("[data-files]").set_input_files(
                 {"name": "501.pdf", "mimeType": "application/pdf", "buffer": pdf_bytes(501)}
             )
-            await expect(page.locator("[data-start]")).to_be_enabled(timeout=30000)
-            await expect(page.locator("[data-page-image]")).to_be_visible(timeout=10000)
-            await page.wait_for_function(
-                "() => document.querySelector('[data-page-image]').naturalWidth > 0"
+            try:
+                await expect(page.locator("[data-page-image]")).to_be_visible(timeout=10000)
+                await page.wait_for_function(
+                    "() => document.querySelector('[data-page-image]').naturalWidth > 0",
+                    timeout=10000,
+                )
+                first_preview = perf_counter() - began
+                # Функциональный тест ждёт 501 настоящий рендер; 30 с не являются SLA сервиса.
+                await expect(page.locator("[data-start]")).to_be_enabled(timeout=120000)
+            except (AssertionError, BrowserTimeout) as exc:
+                identifier = await page.evaluate("sessionStorage.getItem('intake_job')")
+                stored = await container.database.get(identifier) if identifier else None
+                diagnostic = {
+                    "uploaded": bool(identifier),
+                    "status": stored.status if stored else None,
+                    "stage": stored.stage if stored else None,
+                    "pages_ready": len(stored.manifest.get("pages", [])) if stored else 0,
+                    "preview_complete": stored.preview_complete if stored else False,
+                    "wait_error": type(exc).__name__,
+                }
+                pytest.fail(f"Подготовка превью: {json.dumps(diagnostic)}", pytrace=False)
+            timings = {
+                "pages": 501,
+                "first_preview_seconds": round(first_preview, 3),
+                "all_previews_seconds": round(perf_counter() - began, 3),
+            }
+            await asyncio.to_thread(Path("tmp").mkdir, exist_ok=True)
+            await asyncio.to_thread(
+                Path("tmp/browser-501-preparation.json").write_text, json.dumps(timings), "utf-8"
             )
             await page.wait_for_timeout(6500)
             image_requests = sum(

@@ -92,6 +92,33 @@ class ScriptedVision:
         """Выдаёт заготовленный ответ либо минимальную корректную синтетическую группу."""
         self.calls.append({"prompt": prompt, "context": context, "pages": pages, "schema": schema})
         await emit("text_delta", {"text": "{synthetic stream}", "validated": False})
+        if schema.get("title") == "RelatedDatesReading" and (
+            not self.answers
+            or not isinstance(self.answers[0], dict)
+            or "readings" not in self.answers[0]
+        ):
+            return {
+                "readings": [
+                    {
+                        "index": ref["index"],
+                        "reference_kind": "unknown",
+                        "date": None,
+                        "readability": "missing",
+                        "date_role": "not_stated",
+                        "date_literal": None,
+                        "source_quote": None,
+                        "source_page": None,
+                        "warnings": ["Синтетическая связанная дата не установлена"],
+                    }
+                    for ref in context["references"]
+                ]
+            }
+        if schema.get("title") == "RelatedDateSummary" and (
+            not self.answers
+            or not isinstance(self.answers[0], dict)
+            or "summary" not in self.answers[0]
+        ):
+            return {"summary": context["source_summary"], "warnings": []}
         if schema.get("title") == "PrimaryDateReading" and (
             not self.answers
             or not isinstance(self.answers[0], dict)

@@ -11,4 +11,5 @@ done
 uv run --frozen ruff check .
 uv run --frozen ruff format --check .
 git diff --check
-uv run --frozen pytest --cov=app --cov-report=term-missing "$@"
+# Полный прогон не использует общий pytest-кеш с возможными правами другого пользователя.
+uv run --frozen pytest -p no:cacheprovider --cov=app --cov-report=term-missing "$@"

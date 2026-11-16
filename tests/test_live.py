@@ -10,7 +10,7 @@ import pytest
 
 from app.core.settings import Settings
 from app.operations import smoke
-from tests.correspondence_support import run_correspondence
+from tests.correspondence_support import mismatch_paths, run_correspondence
 from tests.live_support import run_comparison
 
 pytestmark = pytest.mark.live
@@ -98,4 +98,5 @@ async def test_real_court_correspondence_and_downloads(with_organization):
         path.write_text, json.dumps(report, ensure_ascii=False, indent=2), "utf-8"
     )
     assert report["status"] in {"completed", "completed_with_warnings"}, str(path)
-    assert report["checks"] and all(row["match"] for row in report["checks"]), str(path)
+    matched = bool(report["checks"]) and all(row["match"] for row in report["checks"])
+    assert matched, f"{path}; поля: {mismatch_paths(report['checks'])}"

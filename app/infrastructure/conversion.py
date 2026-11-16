@@ -11,6 +11,7 @@ import sys
 import warnings
 import zipfile
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -180,6 +181,56 @@ def restrict_process(timeout: int) -> None:
         library.seccomp_release(context)
 
 
+def save_png(image: Image.Image, target: Path, dpi: tuple[int, int]) -> None:
+    """Сжимает готовые RGB-пиксели без потерь; поток не обращается к PyMuPDF."""
+    with image:
+        image.save(target, format="PNG", compress_level=1, dpi=dpi)
+
+
+def render_page(
+    page: pymupdf.Page, number: int, target: Path, side: int, encoder: ThreadPoolExecutor
+) -> dict:
+    """Рендерит последовательно, сжимает PNG двумя потоками и ждёт готовности всех файлов."""
+    rect = page.rect
+    if not 1 <= rect.width <= 20000 or not 1 <= rect.height <= 20000:
+        raise IntakeError("corrupt_document", "Недопустимая геометрия PDF")
+    detail_side = min(side * 1.5, 2400)
+    regions = (
+        ("preview", "page", side, None),
+        (
+            "footer_preview",
+            "footer",
+            detail_side,
+            pymupdf.Rect(rect.x0, rect.y0 + rect.height * 2 / 3, rect.x1, rect.y1),
+        ),
+        (
+            "header_preview",
+            "header",
+            detail_side,
+            pymupdf.Rect(rect.x0, rect.y0, rect.x1, rect.y0 + rect.height * 2 / 5),
+        ),
+    )
+    item, pending = {"page_number": number}, []
+    for key, prefix, render_side, clip in regions:
+        scale = render_side / max(rect.width, rect.height)
+        # Все обращения к PyMuPDF остаются в основном потоке изолированного процесса.
+        pixmap = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), clip=clip, alpha=False)
+        image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+        if key == "preview":
+            thumbnail = target / f"thumb-{number}.png"
+            with image.copy() as small:
+                small.thumbnail((180, 180), Image.Resampling.LANCZOS)
+                small.save(thumbnail)
+            item["thumbnail"] = str(thumbnail)
+        path = target / f"{prefix}-{number}.png"
+        pending.append(encoder.submit(save_png, image, path, (pixmap.xres, pixmap.yres)))
+        item[key] = str(path)
+    # Не больше трёх PNG одной страницы в работе; ошибка записи не становится page_ready.
+    for future in pending:
+        future.result()
+    return item
+
+
 def convert(
     path: Path, target: Path, settings: dict, progress: Callable[[str, dict], None] | None = None
 ) -> dict:
@@ -283,52 +334,17 @@ def convert(
     if progress:
         progress("source_discovered", {"page_count": len(document)})
     pages = []
-    for number, page in enumerate(document, 1):
-        if shutil.disk_usage(target).free < settings.get("min_free_bytes", 0):
-            raise IntakeError(
-                "storage_insufficient", "Недостаточно места для подготовки страниц", 507
-            )
-        rect = page.rect
-        if not 1 <= rect.width <= 20000 or not 1 <= rect.height <= 20000:
-            raise IntakeError("corrupt_document", "Недопустимая геометрия PDF")
-        scale = settings["render_side"] / max(rect.width, rect.height)
-        preview = target / f"page-{number}.png"
-        pixmap = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
-        # PNG остаётся без потерь; быстрое сжатие экономит CPU при подготовке больших пачек.
-        pixmap.pil_save(preview, format="PNG", compress_level=1)
-        thumbnail = target / f"thumb-{number}.png"
-        small = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
-        small.thumbnail((180, 180), Image.Resampling.LANCZOS)
-        small.save(thumbnail)
-        small.close()
-        # Отдельный фрагмент из PDF сохраняет мелкие цифры, потерянные в UI-превью.
-        footer_preview = target / f"footer-{number}.png"
-        detail_scale = min(settings["render_side"] * 1.5, 2400) / max(rect.width, rect.height)
-        footer = page.get_pixmap(
-            matrix=pymupdf.Matrix(detail_scale, detail_scale),
-            clip=pymupdf.Rect(rect.x0, rect.y0 + rect.height * 2 / 3, rect.x1, rect.y1),
-            alpha=False,
-        )
-        footer.pil_save(footer_preview, format="PNG", compress_level=1)
-        header_preview = target / f"header-{number}.png"
-        # Строка реквизитов может пересекать границу верхней трети: сохраняем нижний контекст.
-        header = page.get_pixmap(
-            matrix=pymupdf.Matrix(detail_scale, detail_scale),
-            clip=pymupdf.Rect(rect.x0, rect.y0, rect.x1, rect.y0 + rect.height * 2 / 5),
-            alpha=False,
-        )
-        header.pil_save(header_preview, format="PNG", compress_level=1)
-        item = {
-            "page_number": number,
-            "preview": str(preview),
-            "thumbnail": str(thumbnail),
-            "footer_preview": str(footer_preview),
-            "header_preview": str(header_preview),
-            "pdf": str(output),
-        }
-        pages.append(item)
-        if progress:
-            progress("page_ready", item)
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="png") as encoder:
+        for number, page in enumerate(document, 1):
+            if shutil.disk_usage(target).free < settings.get("min_free_bytes", 0):
+                raise IntakeError(
+                    "storage_insufficient", "Недостаточно места для подготовки страниц", 507
+                )
+            item = render_page(page, number, target, settings["render_side"], encoder)
+            item["pdf"] = str(output)
+            pages.append(item)
+            if progress:
+                progress("page_ready", item)
     document.close()
     return {"pages": pages, "normalized_pdf": str(output)}
 
