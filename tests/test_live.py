@@ -97,6 +97,9 @@ async def test_real_court_correspondence_and_downloads(with_organization):
     await asyncio.to_thread(
         path.write_text, json.dumps(report, ensure_ascii=False, indent=2), "utf-8"
     )
-    assert report["status"] in {"completed", "completed_with_warnings"}, str(path)
+    assert report["status"] in {"completed", "completed_with_warnings"}, (
+        f"{path}; status={report['status']}; error_code={report['error_code']}; "
+        f"fallback_code={report['fallback_code']}; seconds={report['seconds']}"
+    )
     matched = bool(report["checks"]) and all(row["match"] for row in report["checks"])
     assert matched, f"{path}; поля: {mismatch_paths(report['checks'])}"

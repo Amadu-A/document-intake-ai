@@ -250,3 +250,35 @@ async def test_unchanged_dates_do_not_regenerate_summary(container):
     )
     assert result.requisites.summary == original.requisites.summary
     assert len(container.vision.calls) == 1
+
+
+async def test_reading_schema_only_allows_current_reference_indices_and_page_addresses(container):
+    """Генерация выбирает существующий адрес/индекс; исходная DTO-схема и даты не подменяются."""
+    original = draft()
+    before_schema = RelatedDatesReading.model_json_schema()
+    other = PageRef(file_id="second-source", page_number=9)
+
+    async def emit(kind, data):
+        """Не выводит синтетические реквизиты в журнал."""
+
+    await review_court_dates(
+        original,
+        [PAGE.model_dump(), other.model_dump()],
+        PAGE,
+        "Синтетический prompt",
+        container.analysis._validated,
+        emit,
+    )
+    call = container.vision.calls[0]
+    schema = call["schema"]
+    assert schema["properties"]["readings"]["minItems"] == 1
+    assert schema["properties"]["readings"]["maxItems"] == 1
+    assert schema["$defs"]["RelatedDateReading"]["properties"]["index"]["enum"] == [0]
+    allowed = {
+        (branch["properties"]["file_id"]["const"], page)
+        for branch in schema["$defs"]["PageRef"]["anyOf"]
+        for page in branch["properties"]["page_number"]["enum"]
+    }
+    assert allowed == {(PAGE.file_id, 1), (other.file_id, 9)}
+    assert {PageRef.model_validate(p) for p in call["context"]["allowed_pages"]} == {PAGE, other}
+    assert RelatedDatesReading.model_json_schema() == before_schema

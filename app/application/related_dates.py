@@ -29,6 +29,8 @@ class ValidatedRequest(Protocol):
         model: type[T],
         validate: Callable[[T], None],
         emit: Emit,
+        *,
+        schema: dict | None = None,
     ) -> T:
         """Получает проверенный ответ, повторяя только в пределах существующего бюджета."""
         ...
@@ -62,6 +64,29 @@ async def review_court_dates(
     for offset in range(0, len(known), 12):
         block = known[offset : offset + 12]
         numbers = {i: ref.number for i, ref in block}
+        schema = RelatedDatesReading.model_json_schema()
+        schema["properties"]["readings"].update(minItems=len(block), maxItems=len(block))
+        schema["$defs"]["RelatedDateReading"]["properties"]["index"] = {
+            "type": "integer",
+            "enum": list(numbers),
+        }
+        by_file = {}
+        for page in allowed:
+            by_file.setdefault(page.file_id, []).append(page.page_number)
+        schema["$defs"]["PageRef"] = {
+            "anyOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "file_id": {"type": "string", "const": file_id},
+                        "page_number": {"type": "integer", "enum": sorted(page_numbers)},
+                    },
+                    "required": ["file_id", "page_number"],
+                    "additionalProperties": False,
+                }
+                for file_id, page_numbers in sorted(by_file.items())
+            ]
+        }
         readings = await request(
             prompt,
             {
@@ -70,6 +95,10 @@ async def review_court_dates(
                 "header_detail_page": header_page.model_dump(),
                 "references": [
                     {"index": i, "number": ref.number, "type": ref.type} for i, ref in block
+                ],
+                "allowed_pages": [
+                    p.model_dump()
+                    for p in sorted(allowed, key=lambda p: (p.file_id, p.page_number))
                 ],
                 "instruction": "Независимо прочитай собственную дату КАЖДОЙ ссылки по номеру "
                 "и типу, только по изображениям. Старые даты и OCR намеренно не переданы. "
@@ -94,6 +123,7 @@ async def review_court_dates(
             RelatedDatesReading,
             lambda value, expected=numbers: validate_related_dates(value, expected, allowed),
             emit,
+            schema=schema,
         )
         for entry in readings.readings:
             target = result.requisites.related_entities.court_cases[entry.index]

@@ -240,7 +240,15 @@ class Analyze:
                     raise
                 last_code = exc.code
                 feedback = [{"code": exc.code, "message": exc.message}]
-            await emit("model_retry", {"attempt": attempt, "code": last_code})
+            await emit(
+                "model_retry",
+                {
+                    "attempt": attempt,
+                    "code": last_code,
+                    "schema": model.__name__,
+                    "task": context.get("task"),
+                },
+            )
             if attempt < self.settings.model_attempts:
                 await asyncio.sleep(min(2 ** (attempt - 1), 4))
         raise IntakeError(
