@@ -24,8 +24,8 @@ def refs(count=4, file_id="source-a"):
 
 
 @pytest.mark.parametrize("auto,skip", [(True, False), (False, False), (False, True)])
-def test_three_valid_modes_and_legacy_job_defaults(auto, skip):
-    """Новые режимы допустимы, отсутствие полей в старом JSON сохраняет auto."""
+def test_three_valid_modes_and_review_job_defaults(auto, skip):
+    """Три режима допустимы; новый объект без параметров ожидает проверки состава."""
     validate_mode(auto, skip)
     job = Job(
         id="synthetic",
@@ -36,7 +36,7 @@ def test_three_valid_modes_and_legacy_job_defaults(auto, skip):
         sources=[],
         prompts={},
     )
-    assert job.auto_split and not job.skip_segmentation and job.plan_revision == 0
+    assert not job.auto_split and not job.skip_segmentation and job.plan_revision == 0
 
 
 def test_conflicting_flags_fail_before_work():

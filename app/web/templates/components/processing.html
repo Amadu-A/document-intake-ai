@@ -1,0 +1,25 @@
+<!-- app/web/templates/components/processing.html -->
+<!-- Общие действия и фактический прогресс текущего задания, независимо от режима. -->
+<section class="processing" aria-labelledby="processing-title" data-processing>
+  <div class="processing__summary" role="status" aria-live="polite" aria-atomic="true">
+    <span class="processing__status" data-processing-status>Анализ не запущен</span>
+    <h2 class="processing__title" id="processing-title" data-processing-title>Выберите документы</h2>
+    <p class="processing__description" data-processing-description>Анализ не запущен</p>
+    <progress class="processing__progress" data-progress hidden aria-label="Прогресс текущего этапа"></progress>
+  </div>
+  <div class="processing__actions" aria-label="Управление обработкой">
+    <button class="button button--primary" type="button" data-start hidden disabled>▶ Запустить анализ</button>
+    <button class="button button--primary" type="button" data-confirm-plan hidden disabled>Подтвердить диапазоны</button>
+    <button class="button" type="button" data-cancel hidden>Отменить обработку</button>
+    <button class="button button--teal" type="button" data-export hidden disabled>↓ Экспорт JSON</button>
+    <button class="button" type="button" data-new-analysis>＋ Новый пакет</button>
+  </div>
+  <ol class="processing__steps" aria-label="Последовательность обработки" data-processing-steps>
+    <li class="processing__step" data-processing-step="preview">Превью</li>
+    <li class="processing__step" data-processing-step="ocr">OCR</li>
+    <li class="processing__step" data-processing-step="boundaries">Границы</li>
+    <li class="processing__step" data-processing-step="confirmation">Подтверждение</li>
+    <li class="processing__step" data-processing-step="extraction">Реквизиты</li>
+    <li class="processing__step" data-processing-step="done">Готово</li>
+  </ol>
+</section>

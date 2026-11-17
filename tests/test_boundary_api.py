@@ -21,7 +21,7 @@ async def create(client, *, mode=None, endpoint="jobs", pages=4, files=1, key=No
     response = await client.post(
         f"/api/v1/{endpoint}",
         headers=headers,
-        data=mode or {},
+        data={"auto_split": "true"} if mode is None else mode,
         files=[
             ("files", (f"synthetic-{n}.pdf", pdf_bytes(pages), "application/pdf"))
             for n in range(files)

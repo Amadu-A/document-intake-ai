@@ -3,8 +3,9 @@
 import { api, notice } from "../api.js";
 import { previewURL, clearPreviews } from "../previews.js";
 import { pageKey, sourceLabel, groupFor, splitRange, mergeRanges, excludePages, createRange, moveBoundary, coversPages } from "./boundary_state.js";
+import { modeFlags, modeFromFlags } from "./modes.js";
 
-export function createBoundaryEditor(viewer, changed) {
+export function createBoundaryEditor(viewer, changed, controlsChanged = () => {}) {
   /** Хранит метаданные; изображения и URL запрашивает порциями по 60 страниц. */
   let snapshot = null, saved = null, savedStatus = null, plan = null, physical = [], filtered = [], selected = new Set(), anchor = 0;
   let busy = false, history = [], generation = 0, editing = null, lastJob = null;
@@ -12,12 +13,13 @@ export function createBoundaryEditor(viewer, changed) {
   const cache = new Map(), requests = new Map();
   const finalRoles = new Map();
   const scroll = document.querySelector("[data-boundary-scroll]"), track = document.querySelector("[data-boundary-track]");
-  const auto = document.querySelector("[data-auto-split]"), skip = document.querySelector("[data-skip-segmentation]");
+  const modes = Array.from(document.querySelectorAll("[data-segmentation-mode]"));
   const saveLabel = document.querySelector("[data-boundary-save]"), confirm = document.querySelector("[data-confirm-plan]");
   const sourceSelect = document.querySelector("[data-source-select]");
   const errorLabel = document.querySelector("[data-boundary-error]");
   const endpoint = () => `/api/v1/jobs/${snapshot.job_id}`;
-  function flags() { /** Возвращает значения переключателей для multipart. */ return { auto_split: auto.checked, skip_segmentation: skip.checked }; }
+  function flags() { /** Читает единственное выбранное значение радиогруппы. */ return modeFlags(modes.find(control => control.checked).value); }
+  function selectMode(mode) { /** Серверный ACK восстанавливает одно выбранное значение. */ for (const control of modes) control.checked = control.value === mode; }
   async function metadata(ref) {
     /** Один запрос на окно; signed URL обновляется до истечения пяти минут. */
     if (!snapshot) return null;
@@ -51,12 +53,10 @@ export function createBoundaryEditor(viewer, changed) {
   function controls() {
     /** Подтверждение доступно для полностью сохранённого и покрытого плана. */
     const locked = !snapshot || snapshot.plan_locked || ["failed", "cancelled", "completed", "completed_with_warnings", "expired"].includes(snapshot.status) || (snapshot.expires_at && Date.parse(snapshot.expires_at) <= Date.now());
-    skip.disabled = busy || locked && !!snapshot;
-    auto.disabled = skip.disabled || skip.checked;
+    for (const control of modes) control.disabled = busy || locked && !!snapshot;
     for (const button of document.querySelectorAll("[data-boundary-action]")) button.disabled = busy || locked || !physical.length || (button.dataset.boundaryAction === "undo" && !history.length);
-    confirm.hidden = !saved || saved.locked || !(saved.skip_segmentation || snapshot?.status === "awaiting_confirmation");
     confirm.disabled = locked || busy || !!editing || !saved?.can_confirm || !coversPages(plan, physical) || !plan.documents.length;
-    document.querySelector("[data-mode-hint]").textContent = auto.checked ? "Автоматическое разделение и извлечение без подтверждения" : skip.checked ? "Границы VLM пропущены · исходные файлы или ручные диапазоны" : "VLM предложит состав · извлечение после подтверждения";
+    controlsChanged();
   }
   function render() {
     /** Видимые карточки с overscan: размер DOM ограничен независимо от числа страниц. */
@@ -156,11 +156,9 @@ export function createBoundaryEditor(viewer, changed) {
     const response = await mutate("/segmentation", "PUT", { ...next, action });
     if (response && action !== "undo") history.push(before); controls();
   }
-  for (const control of [auto, skip]) control.addEventListener("change", async () => {
-    if (control === skip && skip.checked) auto.checked = false;
-    if (control === auto && auto.checked) skip.checked = false;
+  for (const control of modes) control.addEventListener("change", async () => {
     if (snapshot) {
-      if (saved?.segmentation_source.startsWith("manual") && !window.confirm("Сменить режим и восстановить исходный состав? Текущий ручной черновик будет заменён.")) { auto.checked = saved.auto_split; skip.checked = saved.skip_segmentation; return; }
+      if (saved?.segmentation_source.startsWith("manual") && !window.confirm("Сменить режим и восстановить исходный состав? Текущий ручной черновик будет заменён.")) { selectMode(modeFromFlags(saved)); return; }
       await mutate("/mode", "PATCH", flags()); history = [];
     }
     controls();
@@ -192,7 +190,7 @@ export function createBoundaryEditor(viewer, changed) {
       snapshot = saved = savedStatus = plan = editing = lastJob = activePageKey = null;
       physical = []; filtered = []; history = []; selected.clear(); cache.clear(); requests.clear(); finalRoles.clear(); busy = false; anchor = 0;
       clearPreviews(); track.replaceChildren(); scroll.scrollLeft = 0;
-      sourceSelect.replaceChildren(new Option("Все файлы", "")); auto.checked = true; skip.checked = false;
+      sourceSelect.replaceChildren(new Option("Все файлы", "")); selectMode("review");
       errorLabel.hidden = true; errorLabel.textContent = "";
       document.querySelector("[data-boundary-selection]").textContent = "Выбрано страниц: 0";
       document.querySelector("[data-page-counts]").textContent = "Превью 0/0";
@@ -221,12 +219,12 @@ export function createBoundaryEditor(viewer, changed) {
         if (own !== generation) return null;
         saved = response; savedStatus = data.status; plan = saved.draft_plan || { documents: [], excluded_pages: [] }; editing = null;
       }
-      auto.checked = saved.auto_split; skip.checked = saved.skip_segmentation;
+      selectMode(modeFromFlags(saved));
       const previousSource = sourceSelect.value; sourceSelect.replaceChildren(new Option("Все файлы", ""));
       for (const source of data.sources) sourceSelect.add(new Option(source.file_name, source.file_id)); sourceSelect.value = previousSource;
       document.querySelector("[data-page-counts]").textContent = `Превью ${data.pages_ready}/${data.pages_total} · в диапазонах ${saved.assigned_count} · исключено ${saved.excluded_count} · свободно ${saved.unassigned_count}`;
       document.querySelector("[data-page-jump]").max = physical.length || 1;
-      document.querySelector("[data-boundary-status]").textContent = data.preview_complete ? `${saved.document_count} диапазонов · ${data.pages_total} страниц · ${sourceLabel(saved.segmentation_source)}` : `Подготовка превью: ${data.pages_ready}/${data.pages_total || "…"}. Готовые страницы уже доступны для разметки.`;
+      document.querySelector("[data-boundary-status]").textContent = data.preview_complete ? saved.segmentation_source === "source_files" && !saved.skip_segmentation ? `Загружено файлов: ${data.sources.length} · ${data.pages_total} страниц. Границы ещё не определены` : `${saved.document_count} диапазонов · ${data.pages_total} страниц · ${sourceLabel(saved.segmentation_source)}` : `Подготовка превью: ${data.pages_ready}/${data.pages_total || "…"}. Готовые страницы уже доступны для разметки.`;
       if (data.comparisons?.total) {
         const p = data.comparisons;
         document.querySelector("[data-boundary-status]").textContent += ` · сравнения ${p.completed}/${p.total} · ошибок ${p.errors}`;

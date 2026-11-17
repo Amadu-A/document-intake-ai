@@ -93,6 +93,8 @@ async def test_real_browser_prompts_upload_sse_export_refresh(container, unused_
             )
             await expect(page.locator("[data-start]")).to_be_enabled()
             await page.locator("[data-start]").click()
+            await expect(page.locator("[data-confirm-plan]")).to_be_enabled(timeout=30000)
+            await page.locator("[data-confirm-plan]").click()
             await expect(page.locator("[data-export]")).to_be_enabled(timeout=30000)
             await expect(page.locator("[data-validation]")).to_contain_text("Проверенный результат")
             await page.locator("[data-next]").click()
@@ -182,8 +184,12 @@ async def test_browser_manual_first_keyboard_exclusion_and_review(container, unu
             assert not container.vision.calls
             await page.get_by_role("button", name="Просмотреть страницу 2", exact=True).click()
             await page.locator('[data-boundary-action="split"]').click()
-            await expect(page.locator("[data-skip-segmentation]")).to_be_checked()
-            await expect(page.locator("[data-auto-split]")).not_to_be_checked()
+            await expect(page.locator('[data-segmentation-mode][value="source"]')).to_be_checked()
+            await expect(page.locator('[data-segmentation-mode][value="auto"]')).not_to_be_checked()
+            page.once("dialog", lambda dialog: dialog.dismiss())
+            await page.locator('[data-segmentation-mode][value="auto"]').click()
+            await expect(page.locator('[data-segmentation-mode][value="source"]')).to_be_checked()
+            await expect(page.locator("[data-boundary-status]")).to_contain_text("2 диапазонов")
             await expect(page.locator("[data-boundary-status]")).to_contain_text("2 диапазонов")
             handle = page.get_by_role("button", name="Конец документа 1", exact=True)
             await handle.focus()
@@ -250,7 +256,7 @@ async def test_browser_manual_first_keyboard_exclusion_and_review(container, unu
             page.once("dialog", lambda dialog: dialog.accept())
             await page.locator("[data-new-analysis]").click()
             await expect(page.locator("[data-files]")).to_be_enabled()
-            await page.locator("[data-auto-split]").uncheck()
+            await page.locator('[data-segmentation-mode][value="review"]').check()
             await page.locator("[data-files]").set_input_files(
                 {"name": "review.pdf", "mimeType": "application/pdf", "buffer": pdf_bytes(3)}
             )
@@ -265,8 +271,8 @@ async def test_browser_manual_first_keyboard_exclusion_and_review(container, unu
             page.once("dialog", lambda dialog: dialog.accept())
             await page.locator("[data-new-analysis]").click()
             await expect(page.locator("[data-files]")).to_be_enabled()
-            await page.locator("[data-skip-segmentation]").check()
-            await expect(page.locator("[data-auto-split]")).to_be_disabled()
+            await page.locator('[data-segmentation-mode][value="source"]').check()
+            await expect(page.locator('[data-segmentation-mode][value="auto"]')).not_to_be_checked()
             segmentation_calls = len(
                 [call for call in container.vision.calls if call["schema"]["title"] == "PairAnswer"]
             )

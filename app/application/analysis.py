@@ -572,6 +572,22 @@ class Analyze:
             """Каждая запись проверяет fence; устаревший worker не публикует свои данные."""
             await self.repository.checkpoint(job.id, job.fence, kind, data)
 
+        async def recognize(selected: list[dict]) -> list[dict]:
+            """Публикует фактический OCR-прогресс, включая адаптеры без промежуточных событий."""
+            counter = job.work_progress.get("ocr")
+            await emit(
+                "ocr_progress",
+                {
+                    "completed": counter.completed
+                    if counter and counter.total == len(selected)
+                    else 0,
+                    "total": len(selected),
+                },
+            )
+            recognized_pages = await self.ocr.recognize(selected, emit)
+            await emit("ocr_progress", {"completed": len(recognized_pages), "total": len(selected)})
+            return recognized_pages
+
         try:
             job = await self._prepared(job, emit)
             if job.status != "running":
@@ -582,7 +598,7 @@ class Analyze:
             if not job.skip_segmentation and job.approved_plan is None:
                 if job.proposed_plan is None:
                     await emit("stage", {"stage": "docling", "progress": 15})
-                    recognized = await self.ocr.recognize(pages, emit)
+                    recognized = await recognize(pages)
                     await emit("stage", {"stage": "segmentation_vlm", "progress": 35})
                     plan = await self.pairwise.run(job, recognized, emit)
                     job = await self.repository.propose(job.id, job.fence, plan)
@@ -618,7 +634,7 @@ class Analyze:
                     if PageRef(file_id=p["file_id"], page_number=p["page_number"]) in needed
                 ]
                 await emit("stage", {"stage": "docling", "progress": 40})
-                recognized = await self.ocr.recognize(selected_pages, emit)
+                recognized = await recognize(selected_pages)
             files = {
                 s.file_id: SourceFile(
                     file_id=s.file_id,
@@ -638,12 +654,13 @@ class Analyze:
                 p.get("ocr_truncated") for p in recognized
             )
             lookup = {(p["file_id"], p["page_number"]): p for p in recognized}
+            await emit("extraction_progress", {"completed": 0, "total": len(groups)})
             for index, group in enumerate(groups, 1):
                 await emit(
                     "stage",
                     {
                         "stage": "extraction_vlm",
-                        "progress": 50 + int(40 * index / len(groups)),
+                        "progress": 50 + int(40 * (index - 1) / len(groups)),
                     },
                 )
                 selected = [lookup[(p.file_id, p.page_number)] for p in group.pages]
@@ -699,6 +716,7 @@ class Analyze:
                     )
                 )
                 has_warnings |= bool(facts.warnings)
+                await emit("extraction_progress", {"completed": index, "total": len(groups)})
             result = BatchResult(batch_id=job.id, files=list(files.values())).model_dump(
                 mode="json"
             )

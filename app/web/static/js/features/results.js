@@ -9,7 +9,8 @@ export function renderPlan(snapshot, viewer) {
   let count = 0;
   documents.slice(0, 60).forEach((doc, index) => {
     const card = document.createElement("article"); card.className = "structure__document";
-    const title = document.createElement("h3"); title.textContent = `${index + 1}. ${doc.probable_kind || "Документ"} · ${doc.pages.length} стр.`;
+    const initial = segmentation?.segmentation_source === "source_files" && !segmentation.locked;
+    const title = document.createElement("h3"); title.textContent = `${index + 1}. ${doc.probable_kind || (initial ? "Исходный файл" : "Документ")} · ${doc.pages.length} стр.`;
     const pageButtons = document.createElement("div"); pageButtons.className = "structure__pages";
     doc.pages.slice(0, 6).forEach(ref => {
       const button = document.createElement("button"); button.type = "button"; button.className = "button button--compact";
@@ -29,9 +30,10 @@ export function renderPlan(snapshot, viewer) {
     const reason = document.createElement("p"); reason.className = "structure__reason"; reason.textContent = doc.reason || sourceLabel(segmentation?.segmentation_source); card.append(reason);
     target.append(card);
   });
-  document.querySelector("[data-count-documents]").textContent = documents.length || "—";
+  const initial = segmentation?.segmentation_source === "source_files" && !segmentation.locked;
+  document.querySelector("[data-count-documents]").textContent = !initial && documents.length || "—";
   document.querySelector("[data-count-attachments]").textContent = documents.length ? count : "—";
-  document.querySelector("[data-structure-status]").textContent = documents.length ?
+  document.querySelector("[data-structure-status]").textContent = initial && !segmentation.skip_segmentation ? `Загружен${snapshot.sources.length === 1 ? " 1 файл" : "о файлов: " + snapshot.sources.length} · ${snapshot.pages_total} страниц. Границы ещё не определены` : documents.length ?
     `${documents.length} ${segmentation?.locked ? "регистрационных документов" : "диапазонов черновика"} · ${count} приложений · ${segmentation?.locked ? "состав заблокирован" : "черновик состава"}${documents.length > 60 ? " · показаны первые 60, остальные доступны через ленту" : ""}` : "Здесь появится состав документов";
 }
 
@@ -61,8 +63,18 @@ export function renderFacts(result) {
 
 export function journal(event, data) {
   /** Хранит ограниченный визуальный журнал, не копируя в него приватный raw stream. */
-  const item = document.createElement("li");
-  item.textContent = (data.stage || data.status || data.code || event) + (data.attempt ? " · попытка " + data.attempt : "");
+  const stageNames = { preparing_preview: "Подготавливаем страницы", docling: "Распознаём текст документов", segmentation_vlm: "Определяем границы документов", extraction_vlm: "Извлекаем реквизиты" };
+  const statuses = { awaiting_confirmation: "Ожидается подтверждение пользователя", completed: "Обработка завершена", completed_with_warnings: "Обработка завершена с предупреждениями", failed: "Обработка завершилась ошибкой", cancelled: "Обработка отменена" };
+  const messages = { created: "Файлы загружены", queued: "Задание поставлено в очередь", started: "Началась обработка", preview_ready: "Превью готовы", segmentation: "Определение границ завершено", plan_approved: "Диапазоны подтверждены", draft_saved: "Разметка сохранена", mode_changed: "Режим изменён", ocr_retry: "OCR ожидает освобождения сервиса", model_retry: "Повторная проверка ответа модели", retry: "Обработка будет повторена", warning: "Обнаружено предупреждение", expired: "Срок хранения истёк" };
+  let text = event === "stage" ? stageNames[data.stage] : event === "terminal" || event === "status" ? statuses[data.status] : messages[event];
+  if (event === "ocr_progress") text = `OCR: обработано ${data.completed} из ${data.total} страниц`;
+  if (event === "extraction_progress") text = `Извлечение реквизитов: ${data.completed} из ${data.total}`;
+  if (event === "comparisons_progress") text = `Проверка границ: ${data.completed} из ${data.total}`;
+  if (event === "approved") text = `Подтверждены ${data.count} документов`;
+  if (event === "json_ready") text = "JSON сформирован";
+  if (event === "pair_result" && data.status === "unresolved") text = "Требуется проверка границы между страницами";
+  if (!text) return;
+  const item = document.createElement("li"); item.textContent = text;
   const target = document.querySelector("[data-journal]"); target.append(item);
   while (target.children.length > 200) target.firstElementChild.remove();
 }

@@ -13,15 +13,16 @@
     <p class="upload__hint" id="organization-help">Определяет входящее/исходящее направление. Без выбора организация не угадывается по PDF.</p>
     <ul class="upload__queue" data-file-list></ul>
   </div>
-  <div class="upload__mode"><strong>РЕЖИМ РАЗДЕЛЕНИЯ</strong>
-    <div class="mode">
-      <label class="mode__option"><input class="mode__switch" type="checkbox" role="switch" data-auto-split checked><span><strong>Авторазделение</strong><small>VLM решает самостоятельно</small></span></label>
-      <label class="mode__option"><input class="mode__switch" type="checkbox" role="switch" data-skip-segmentation><span><strong>Пропустить определение границ</strong><small>Каждый файл — готовый документ</small></span></label>
-    </div><p class="mode__hint" data-mode-hint>Автоматическое разделение и извлечение без подтверждения</p>
-  </div>
+  <fieldset class="mode">
+    <legend class="mode__legend">РЕЖИМ РАЗДЕЛЕНИЯ</legend>
+    <label class="mode__option"><input class="mode__radio" type="radio" name="segmentation-mode" value="review" data-segmentation-mode checked><span><strong>Предложить разделение для проверки <span class="mode__default">— ПО УМОЛЧАНИЮ</span></strong><small>Сервис предложит границы документов. Вы сможете изменить их и подтвердить перед извлечением реквизитов.</small></span></label>
+    <label class="mode__option"><input class="mode__radio" type="radio" name="segmentation-mode" value="auto" data-segmentation-mode><span><strong>Разделить автоматически</strong><small>Сервис самостоятельно определит границы документов и извлечёт реквизиты. Если некоторые границы определить не удалось, потребуется проверка.</small></span></label>
+    <label class="mode__option"><input class="mode__radio" type="radio" name="segmentation-mode" value="source" data-segmentation-mode><span><strong>Без автоматического разделения</strong><small>Каждый загруженный файл считается одним документом. При необходимости разделите страницы вручную.</small></span></label>
+  </fieldset>
   <dl class="metrics"><div class="metrics__item"><dt>Файлов</dt><dd data-count-files>0</dd></div><div class="metrics__item"><dt>Документов</dt><dd data-count-documents>—</dd></div><div class="metrics__item metrics__item--teal"><dt>Приложений</dt><dd data-count-attachments>—</dd></div></dl>
 </section>
 <div class="notice" role="status" aria-live="polite" data-notice>Загрузите документы. Сервис самостоятельно определит состав пакета и подготовит PDF для каждой регистрации.</div>
+{% include 'components/processing.html' %}
 {% include 'components/boundaries.html' %}
 <div class="workspace">
   <section class="panel viewer" aria-labelledby="viewer-title">
@@ -35,8 +36,6 @@
     <div class="panel__heading"><h2 id="structure-title">◫ Структура пакета</h2><span class="panel__muted">VLM + Docling</span></div>
     <p class="structure__status" data-structure-status>Решение модели появится после анализа</p>
     <div class="structure__documents" data-documents></div>
-    <button class="button" type="button" data-cancel hidden>Отменить обработку</button>
-    <button class="button" type="button" data-new-analysis>＋ Новый пакет</button>
   </section>
   <section class="panel result" aria-labelledby="result-title">
     <div class="panel__heading"><h2 id="result-title">{ } Результат извлечения</h2><span class="badge" data-job-status>Ожидание</span></div>
@@ -49,7 +48,6 @@
     <section id="result-json" role="tabpanel" aria-labelledby="tab-json" data-result-panel="json"><pre class="result__json" data-json>Ожидание анализа…</pre></section>
     <section id="result-facts" role="tabpanel" aria-labelledby="tab-facts" data-result-panel="facts" hidden><div class="result__facts" data-facts>Подтверждённые реквизиты появятся после проверки JSON.</div></section>
     <section id="result-stages" role="tabpanel" aria-labelledby="tab-stages" data-result-panel="stages" hidden><ol class="journal" data-journal></ol></section>
-    <progress class="result__progress" data-progress max="100" value="0" aria-label="Прогресс обработки"></progress>
     <ul class="result__warnings" data-warnings></ul>
   </section>
 </div>

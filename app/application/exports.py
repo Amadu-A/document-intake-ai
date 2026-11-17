@@ -172,6 +172,10 @@ class Exports:
             "status": job.status,
             "stage": job.stage,
             "progress": job.progress,
+            "work_stage": job.work_stage,
+            "work_progress": {
+                stage: counter.model_dump() for stage, counter in job.work_progress.items()
+            },
             "created_at": job.created_at,
             "completed_at": job.completed_at,
             "expires_at": job.expires_at,

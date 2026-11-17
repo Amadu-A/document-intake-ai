@@ -112,7 +112,10 @@ async def test_501_docling_pages_retry_overload_without_losing_checkpoints(setti
         cached = await DoclingOCR(settings, shared).recognize(pages, emit)
     assert len(calls) == 28 and cached == result
     assert [p["page_number"] for p in result] == list(range(1, 502))
-    assert len(events) == 2 and all(event[0] == "ocr_retry" for event in events)
+    assert len([event for event in events if event[0] == "ocr_retry"]) == 2
+    progress = [data for kind, data in events if kind == "ocr_progress"]
+    assert len(progress) == 28 and progress[-1] == {"completed": 501, "total": 501}
+    assert [p["completed"] for p in progress] == sorted(p["completed"] for p in progress)
 
 
 @pytest.mark.parametrize("retry_after,expected_calls", [("0", 5), ("120", 1)])
@@ -178,7 +181,8 @@ async def test_docling_cancellation_interrupts_retry_wait(settings, tmp_path):
 
     async def emit(kind, data):
         """Сообщает, что запрос перешёл к ожиданию слота."""
-        waiting.set()
+        if kind == "ocr_retry":
+            waiting.set()
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as shared:
         task = asyncio.create_task(DoclingOCR(settings, shared).recognize([page], emit))

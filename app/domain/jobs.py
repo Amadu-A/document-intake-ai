@@ -42,6 +42,13 @@ class Source(StrictModel):
     page_count: int = 0
 
 
+class WorkProgress(StrictModel):
+    """Фактически завершённые единицы одного этапа, сохраняемые вместе с заданием."""
+
+    completed: int = Field(ge=0)
+    total: int = Field(ge=0)
+
+
 class Job(StrictModel):
     """Снимок задания, не привязанный к драйверу БД или HTTP."""
 
@@ -63,7 +70,7 @@ class Job(StrictModel):
     manifest: dict = Field(default_factory=dict)
     error: dict | None = None
     cursor: int = 0
-    auto_split: bool = True
+    auto_split: bool = False
     skip_segmentation: bool = False
     segmentation_source: SegmentationSource = "source_files"
     plan_revision: int = 0
@@ -81,6 +88,8 @@ class Job(StrictModel):
     queue_deadline_at: datetime | None = None
     preview_deadline_at: datetime | None = None
     processing_deadline_at: datetime | None = None
+    work_progress: dict[Literal["ocr", "extraction"], WorkProgress] = Field(default_factory=dict)
+    work_stage: str | None = None
 
     def page_refs(self) -> list[PageRef]:
         """Перечисляет обнаруженные физические страницы в порядке источников, независимо от PNG."""

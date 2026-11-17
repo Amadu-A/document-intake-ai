@@ -275,6 +275,7 @@ async def smoke(settings: Settings) -> None:
             base + "/api/v1/jobs",
             headers={"X-API-Key": key.get_secret_value()},
             files={"files": ("synthetic.pdf", payload, "application/pdf")},
+            data={"auto_split": "true"},
         )
         if response.status_code != 202:
             raise OperationError("HTTP smoke: submit не вернул 202")

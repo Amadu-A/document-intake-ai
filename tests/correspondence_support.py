@@ -294,12 +294,42 @@ async def run_correspondence(
         )
     response.raise_for_status()
     identifier = response.json()["job_id"]
+    confirmation = None
     while monotonic() - began < timeout_seconds:
         response = await client.get(
             f"/api/v1/jobs/{identifier}/snapshot?include_pages=false", headers=headers
         )
         response.raise_for_status()
         status = response.json()
+        if status["status"] == "awaiting_confirmation":
+            response = await client.get(f"/api/v1/jobs/{identifier}/segmentation", headers=headers)
+            response.raise_for_status()
+            segmentation = response.json()
+            ranges = [
+                [page["page_number"] for page in document["pages"]]
+                for document in (segmentation["draft_plan"] or {}).get("documents", [])
+            ]
+            expected_ranges = (
+                [[1], [2, 3, 4], [5, 6], [7], [8]]
+                if sequential
+                else [d["pages"] for f in golden["files"] for d in f["documents"]]
+            )
+            if ranges != expected_ranges or not segmentation["can_confirm"]:
+                break
+            unavailable = await client.get(f"/api/v1/jobs/{identifier}/result", headers=headers)
+            assert unavailable.status_code == 409, "JSON недоступен до подтверждения"
+            response = await client.post(
+                f"/api/v1/jobs/{identifier}/segmentation/confirm",
+                headers=headers,
+                json={"expected_revision": segmentation["plan_revision"]},
+            )
+            response.raise_for_status()
+            confirmation = {
+                "plan_revision": segmentation["plan_revision"],
+                "result_before_confirmation": unavailable.status_code,
+                "confirm_http_status": response.status_code,
+            }
+            continue
         if status["status"] in {
             "completed",
             "completed_with_warnings",
@@ -318,6 +348,7 @@ async def run_correspondence(
         "unresolved_pairs": status.get("comparisons", {}).get("errors", 0),
         "seconds": round(monotonic() - began, 2),
         "checks": [],
+        "confirmation": confirmation,
     }
     if status["status"] not in {"completed", "completed_with_warnings"}:
         return report

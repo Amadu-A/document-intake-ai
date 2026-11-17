@@ -361,7 +361,10 @@ async def _run_case(
     path = examples_dir / case["file"]
     payload = await asyncio.to_thread(path.read_bytes)
     response = await client.post(
-        "/api/v1/jobs", headers=headers, files={"files": (path.name, payload, "application/pdf")}
+        "/api/v1/jobs",
+        headers=headers,
+        files={"files": (path.name, payload, "application/pdf")},
+        data={"auto_split": "true"},
     )
     _row(rows, "submit.http_status", 202, response.status_code)
     if response.status_code != 202:

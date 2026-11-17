@@ -31,10 +31,10 @@ class Intake:
         organization: str | None,
         key: str | None,
         start: bool,
-        auto_split: bool = True,
+        auto_split: bool = False,
         skip_segmentation: bool = False,
     ) -> Job:
-        """Сохраняет оригиналы и атомарно создаёт job/outbox с owner-idempotency."""
+        """Создаёт job/outbox с owner-idempotency; по умолчанию требует проверки границ."""
         validate_mode(auto_split, skip_segmentation)
         if key is not None and not 1 <= len(key) <= 128:
             raise IntakeError("invalid_idempotency_key", "Неверная длина Idempotency-Key")

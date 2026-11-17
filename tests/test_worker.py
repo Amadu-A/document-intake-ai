@@ -16,7 +16,7 @@ from tests.support import MemoryUpload, pdf_bytes
 async def test_worker_process_and_duplicate_delivery(container):
     """Повторная доставка готового задания не вызывает второй VLM-анализ."""
     job = await container.intake.upload(
-        "integration:onec", [MemoryUpload(pdf_bytes())], None, None, True
+        "integration:onec", [MemoryUpload(pdf_bytes())], None, None, True, auto_split=True
     )
     await process(container, job.id)
     assert (await container.database.get(job.id)).status == "completed_with_warnings"

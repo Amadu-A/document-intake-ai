@@ -12,7 +12,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.domain.comparisons import ALGORITHM_VERSION, Comparison
 from app.domain.errors import IntakeError, LeaseLost
-from app.domain.jobs import TERMINAL, Job, utcnow
+from app.domain.jobs import TERMINAL, Job, WorkProgress, utcnow
 from app.infrastructure.boundary_transactions import BoundaryTransactions
 
 
@@ -356,6 +356,12 @@ class Database(BoundaryTransactions):
                 job.comparisons = [indexed[i] for i in sorted(indexed)]
             elif kind == "stage":
                 job.stage, job.progress = data["stage"], data["progress"]
+                job.work_stage = data["stage"]
+            elif kind in {"ocr_progress", "extraction_progress"}:
+                counter = WorkProgress.model_validate(data)
+                if counter.completed > counter.total:
+                    raise ValueError("Число завершённых операций превышает общее число")
+                job.work_progress[kind.removesuffix("_progress")] = counter
             elif kind == "normalized":
                 job.manifest = data
                 for source in job.sources:

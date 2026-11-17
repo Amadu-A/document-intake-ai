@@ -325,19 +325,19 @@ class DoclingOCR:
         """Разбивает большой вход на OCR-окна и восстанавливает глобальные page identifiers."""
         if not self.settings.docling_api_key.get_secret_value():
             raise IntakeError("docling_unavailable", "Не настроен DOCLING_API_KEY проекта", 503)
+        saved = {}
+        for page in pages:
+            cached = await asyncio.to_thread(self._cached, page)
+            if cached is not None:
+                saved[(page["file_id"], page["page_number"])] = cached
+        await emit("ocr_progress", {"completed": len(saved), "total": len(pages)})
         result = []
         for chunk in windows(pages, self.settings.docling_window_pages):
-            saved = {}
-            missing = []
-            for page in chunk:
-                cached = await asyncio.to_thread(self._cached, page)
-                if cached is None:
-                    missing.append(page)
-                else:
-                    saved[(page["file_id"], page["page_number"])] = cached
+            missing = [p for p in chunk if (p["file_id"], p["page_number"]) not in saved]
             if missing:
                 for page in await self._window(missing, emit):
                     saved[(page["file_id"], page["page_number"])] = page
+                await emit("ocr_progress", {"completed": len(saved), "total": len(pages)})
             result.extend(saved[(p["file_id"], p["page_number"])] for p in chunk)
         return result
 

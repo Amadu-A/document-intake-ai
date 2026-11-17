@@ -211,7 +211,9 @@ async def test_browser_501_preview_cache_and_unresolved_transitions(container, u
             )
             assert await page.evaluate("() => document.documentElement.scrollHeight < 2500")
             await page.screenshot(path="tmp/browser-501-partial.png", full_page=True)
-            await page.locator("[data-cancel]").click()
+            page.once("dialog", lambda dialog: dialog.accept())
+            await page.locator("[data-new-analysis]").click()
+            await expect(page.locator("[data-processing-title]")).to_have_text("Выберите документы")
             await browser.close()
     finally:
         if "browser" in locals():

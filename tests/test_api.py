@@ -19,6 +19,7 @@ async def submit(client, count=1, key="request-a", endpoint="jobs"):
     return await client.post(
         f"/api/v1/{endpoint}",
         headers={**KEY, "Idempotency-Key": key},
+        data={"auto_split": "true"},
         files={"files": ("synthetic.pdf", pdf_bytes(count), "application/pdf")},
     )
 

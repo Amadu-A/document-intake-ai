@@ -30,7 +30,7 @@ async def migrate(container):
 async def test_legacy_jobs_are_retired_without_reinterpreting_results(container, completed):
     """Активное задание завершается диагностикой, terminal сохраняет JSON и артефакты."""
     job = await container.intake.upload(
-        "integration:onec", [MemoryUpload(pdf_bytes(2))], None, None, True
+        "integration:onec", [MemoryUpload(pdf_bytes(2))], None, None, True, auto_split=True
     )
     if completed:
         await process(container, job.id)

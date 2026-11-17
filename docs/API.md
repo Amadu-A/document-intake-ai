@@ -40,7 +40,9 @@ Web передаёт тот же параметр из необязательн�
 Повтор owner + key + те же файлы/контекст/prompts возвращает прежнее задание.
 Другой payload с тем же ключом — `409 idempotency_conflict`. Название файла и порядок
 источников входят в hash запроса. Retry повторяет исходные bytes, а не пересозданный PDF.
-Для default-режима сохранён прежний hash, поэтому retry ключей до обновления совместим.
+Режим входит в hash. После изменения default старый ключ автоматического запроса
+повторяется с явным `auto_split=true`; тот же ключ с новым default даёт конфликт,
+а не возвращает автоматически обработанное задание вместо review.
 `/uploads` не фиксирует промпты в hash: snapshots снимаются при start/confirm.
 
 Статусы: `uploaded`, `queued`, `running`, `awaiting_confirmation`, `completed`, `completed_with_warnings`,
@@ -53,19 +55,29 @@ SSE-события имеют возрастающий `id`. `text_delta` сод
 это поток модели для просмотра, его нельзя использовать как реквизиты для регистрации.
 После reconnect клиент читает snapshot и продолжает с cursor. Итог получает отдельно.
 
-## 3 шага по умолчанию
+## Подтверждение по умолчанию: Web, 1С и Telegram
 
 1. `POST /api/v1/jobs`, multipart `files` (повторяется для каждого файла), необязательный
    `organization_hint`; сохранить `job_id` из ответа `202`.
-2. `GET /api/v1/jobs/{job_id}?include_pages=false` до `completed` или
-   `completed_with_warnings`; `failed` содержит диагностический код. Долгий анализ
-   выполняется worker, HTTP-запрос не удерживается.
-3. `GET /api/v1/jobs/{job_id}/result`, затем скачать реальные PDF по
+2. `GET /api/v1/jobs/{job_id}?include_pages=false` до `awaiting_confirmation`.
+   Извлечение ещё не началось; `/result` возвращает `409 result_not_ready`.
+3. `GET /api/v1/jobs/{job_id}/segmentation`: показать пользователю `proposed_plan`,
+   `draft_plan`, `plan_revision`, `can_confirm`, `comparisons`. Страницы адресуются
+   реальными `file_id` и физическими `page_number`.
+4. Необязательно: `PUT /api/v1/jobs/{job_id}/segmentation` с последней
+   `expected_revision`, исправленными `documents`, `excluded_pages`, `action="edit"`.
+   Получить новую `plan_revision`; исходное предложение сохраняется отдельно.
+5. `POST /api/v1/jobs/{job_id}/segmentation/confirm`, JSON
+   `{"expected_revision": 4}`, где 4 — фактическая последняя ревизия. Ответ `202`;
+   повтор той же ревизии идемпотентен, устаревшая ревизия даёт `409`.
+6. Poll до `completed`/`completed_with_warnings`, затем
+   `GET /api/v1/jobs/{job_id}/result`, скачать реальные PDF по
    `files[].documents[].attachment_file.file_url`. Проверить SHA-256/размер из status.
 
-Старые клиенты не передают новые flags и при корректном плане работают автоматически.
-Неопределённые переходы требуют проверки состава, как описано ниже.
-Интеграции обязаны различать awaiting_confirmation и успешное завершение.
+Это намеренное изменение API: отсутствие flags больше не включает Auto ни для
+одной интеграции. `/start` не обходит подтверждение. Для полностью автоматического
+сценария передавайте `auto_split=true` явно; неизвестные переходы всё равно требуют
+проверки. Существующие задания сохраняют явно сохранённые параметры.
 
 ## Необязательные режимы и редактор
 
@@ -73,8 +85,8 @@ SSE-события имеют возрастающий `id`. `text_delta` сод
 
 | `auto_split` | `skip_segmentation` | Поведение |
 |---|---|---|
-| `true` (default) | `false` (default) | VLM определяет состав, затем извлекает факты |
-| `false` | `false` | VLM предлагает состав; `awaiting_confirmation`, затем confirm |
+| `false` (default) | `false` (default) | VLM предлагает состав; `awaiting_confirmation`, затем confirm |
+| `true` | `false` | Явно выбран Auto: VLM определяет состав, затем извлекает факты |
 | `false` | `true` | Один файл — одна группа; прямой `/jobs` не требует confirm |
 | `true` | `true` | `422 invalid_segmentation_mode` |
 
@@ -136,6 +148,11 @@ UI использует `include_pages=false` для status/snapshot/SSE; изо
 `source_discovered`, `page_ready`, `preview_ready`, `mode_changed`, `draft_saved`,
 `plan_approved`, `plan_locked`; пути файловой системы в SSE не выдаются.
 Дополнительно: `ocr_retry` (attempt/http_status/retry_after_seconds),
+`ocr_progress`, `extraction_progress` — фактические `{completed,total}` без OCR
+и ответов модели. Status/snapshot сохраняет их в `work_progress.ocr` и
+`work_progress.extraction`; неизвестный счётчик отсутствует. `work_stage` сохраняет
+последний выполнявшийся этап, в том числе при ошибке/отмене. Превью отдельно:
+`pages_ready`/`pages_total`. Общий legacy `progress` не является процентом OCR.
 `pair_started` и `pair_result` (index, адреса соседей, status, attempts, solution,
 error_code, duration_seconds; без OCR/отпечатка). Порядок событий пар может отличаться
 от физического порядка; использовать index и PageRef.
@@ -206,7 +223,7 @@ Raw SSE модели содержит ещё не спроектированны
 Сложная provenance сквозного комплекта находится в manifest; `pages` публичного JSON
 содержит реальные физические номера первого source, а не выдуманную общую нумерацию.
 
-Пример независимого Python-клиента (ключ заранее помещён в окружение интеграции;
+Пример независимого Python-клиента с явно выбранным Auto (ключ помещён в окружение интеграции;
 не передавайте ключ аргументом командной строки и не печатайте ответы с документами):
 
 ```python
@@ -226,7 +243,7 @@ with httpx.Client(timeout=120, trust_env=False) as client:
             base + "/api/v1/jobs",
             headers={**headers, "Idempotency-Key": "registration-upload-2026-0001"},
             files={"files": (source_path.name, stream, "application/pdf")},
-            data={"organization_hint": "ООО «Взлет-МСК»"},
+            data={"organization_hint": "ООО «Взлет-МСК»", "auto_split": "true"},
         )
     response.raise_for_status()
     job_id = response.json()["job_id"]

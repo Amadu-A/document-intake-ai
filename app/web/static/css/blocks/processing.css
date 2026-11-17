@@ -1,0 +1,26 @@
+/* app/web/static/css/blocks/processing.css */
+/* Постоянная панель задания и взаимоисключающие карточки режимов. */
+.mode { display: grid; gap: 7px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.mode__legend { margin-bottom: 7px; font-size: 11px; font-weight: 700; }
+.mode__option { display: flex; align-items: flex-start; gap: 9px; padding: 10px 12px; border: 1px solid var(--color-line); border-radius: 10px; background: var(--color-panel); cursor: pointer; }
+.mode__option:has(:checked) { border-color: var(--color-blue); background: #f3f8ff; }
+.mode__option:has(:focus-visible) { outline: 3px solid #aac7ff; outline-offset: 2px; }
+.mode__option:has(:disabled) { cursor: default; opacity: .7; }
+.mode__option strong { display: block; font-size: 12px; }
+.mode__option small { display: block; margin-top: 4px; color: var(--color-muted); line-height: 1.45; font-size: 11px; }
+.mode__radio { flex: none; margin: 2px 0 0; accent-color: var(--color-blue); }
+.mode__default { color: var(--color-blue); font-size: 10px; white-space: nowrap; }
+.processing { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 16px; padding: 19px 21px; margin: 0 0 18px; border: 1px solid #c3d9ff; border-radius: var(--radius); background: var(--color-panel); box-shadow: var(--shadow); }
+.processing__status { font-size: 11px; color: var(--color-muted); }
+.processing__title { margin: 5px 0; font-size: 18px; }
+.processing__description { margin: 0; font-size: 12px; color: var(--color-muted); overflow-wrap: anywhere; }
+.processing__progress { width: 100%; max-width: 600px; height: 9px; margin-top: 12px; accent-color: var(--color-blue); }
+.processing__actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.processing__steps { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px 16px; list-style: none; margin: 2px 0 0; padding: 13px 0 0; border-top: 1px solid var(--color-line); }
+.processing__step { color: var(--color-muted); font-size: 11px; }
+.processing__step--done { color: var(--color-teal); }
+.processing__step--active { color: var(--color-blue); font-weight: 700; }
+.processing__step--skipped { color: var(--color-muted); font-style: italic; }
+.processing__step--review { color: #916211; }
+.processing__step--error, .processing--error .processing__title { color: #b74936; }
+@media (max-width: 950px) { .processing { grid-template-columns: 1fr; } .processing__actions { justify-content: flex-start; } }

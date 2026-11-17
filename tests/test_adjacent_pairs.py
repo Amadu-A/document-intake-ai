@@ -101,6 +101,7 @@ async def prepared(container, count, files=1):
         None,
         None,
         True,
+        auto_split=True,
     )
     job = await container.database.claim(job.id)
     physical = [p for source in job.sources for p in refs(count, source.file_id)]
@@ -313,7 +314,7 @@ async def test_cancel_interrupts_active_stage_and_accepts_next_job(container, st
 
         container.vision.request = request
     job = await container.intake.upload(
-        "integration:onec", [MemoryUpload(pdf_bytes(8))], None, None, True
+        "integration:onec", [MemoryUpload(pdf_bytes(8))], None, None, True, auto_split=True
     )
     task = asyncio.create_task(process(container, job.id))
     await asyncio.wait_for(entered.wait(), 20)

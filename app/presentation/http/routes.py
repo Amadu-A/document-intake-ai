@@ -99,7 +99,7 @@ async def upload_request(
     organization: str | None,
     key: str | None,
     start: bool,
-    auto_split: bool = True,
+    auto_split: bool = False,
     skip_segmentation: bool = False,
 ) -> JSONResponse:
     """Передаёт transport streams общему сценарию и гарантированно закрывает multipart spools."""
@@ -120,7 +120,7 @@ async def submit(
     files: list[UploadFile],
     organization_hint: Annotated[str | None, Form()] = None,
     idempotency_key: Annotated[str | None, Header()] = None,
-    auto_split: Annotated[bool, Form()] = True,
+    auto_split: Annotated[bool, Form()] = False,
     skip_segmentation: Annotated[bool, Form()] = False,
 ):
     """Возвращает 202 сразу после загрузки; VLM работает в независимом worker."""
@@ -143,7 +143,7 @@ async def upload(
     files: list[UploadFile],
     organization_hint: Annotated[str | None, Form()] = None,
     idempotency_key: Annotated[str | None, Header()] = None,
-    auto_split: Annotated[bool, Form()] = True,
+    auto_split: Annotated[bool, Form()] = False,
     skip_segmentation: Annotated[bool, Form()] = False,
 ):
     """Сохраняет оригиналы и ставит подготовку превью в очередь без вызова OCR/VLM."""

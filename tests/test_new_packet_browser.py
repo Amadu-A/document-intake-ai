@@ -127,6 +127,10 @@ async def test_new_packet_cancels_resets_and_ignores_old_requests(container, unu
             await page.locator("[data-files]").set_input_files(payload)
             await expect(page.locator("[data-start]")).to_be_enabled(timeout=20000)
             detached = await page.evaluate("sessionStorage.getItem('intake_job')")
+            entered.clear()
+            container.vision.request = delayed
+            await page.locator("[data-start]").click()
+            await asyncio.wait_for(entered.wait(), 10)
 
             async def cancel_failure(route):
                 """Отклоняет только собственную команду отмены."""
@@ -144,9 +148,10 @@ async def test_new_packet_cancels_resets_and_ignores_old_requests(container, unu
             assert any("Сервер не подтвердил отмену" in message for message in messages)
             assert await page.evaluate("sessionStorage.getItem('intake_job')") is None
             abandoned = await container.database.get(detached)
-            assert abandoned.status == "uploaded"
+            assert abandoned.status == "running"
             await page.unroute(f"**/api/v1/jobs/{detached}/cancel", cancel_failure)
             await container.database.cancel(detached, abandoned.owner)
+            container.vision.request = original
 
             # После отказа upload тот же drag/drop снова доступен.
             async def reject(route):
