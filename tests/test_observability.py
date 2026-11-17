@@ -7,7 +7,7 @@ import logging
 
 import pytest
 
-from app.core.observability import timed
+from app.core.observability import report_failure, timed
 
 
 def test_sync_timing_success_and_failure(caplog):
@@ -52,3 +52,15 @@ async def test_async_timing_preserves_cancellation(caplog):
         "error",
         "error",
     ]
+
+
+def test_processing_failure_diagnostic_omits_exception_message(caplog):
+    """Причина сбоя остаётся технической: сообщение с документом/секретом не попадает в лог."""
+    try:
+        raise RuntimeError("SYNTHETIC_PRIVATE_OCR_AND_PASSWORD")
+    except RuntimeError as exc:
+        report_failure(exc)
+    diagnostic = json.loads(caplog.records[-1].message)
+    assert diagnostic["type"] == "RuntimeError" and diagnostic["frames"]
+    assert set(diagnostic) == {"event", "type", "frames"}
+    assert "SYNTHETIC_PRIVATE" not in caplog.text

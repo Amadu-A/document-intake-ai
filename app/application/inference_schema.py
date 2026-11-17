@@ -21,13 +21,6 @@ def _require_properties(value: object) -> None:
             _require_properties(child)
 
 
-def segmentation_schema(model) -> dict:
-    """Требует явного поля evidence в новом ответе VLM; старые сохранённые планы совместимы."""
-    schema = model.model_json_schema()
-    _require_properties(schema)
-    return schema
-
-
 def extraction_schema(organization_hint: str | None) -> dict:
     """Ограничивает генерацию фактами контекста и каталогом без исправления ответа модели."""
     schema = ExtractionDraft.model_json_schema()

@@ -58,7 +58,7 @@ async def test_real_five_pairs_comparison_matrix():
 
 @pytest.mark.parametrize("with_organization", [True, False], ids=["organization", "no-context"])
 async def test_real_court_correspondence_and_downloads(with_organization):
-    """Частный эталон проверяет реквизиты, четыре регистрации и целостность восьми страниц."""
+    """Проверяет пять последовательных PDF и факты трёх неизменившихся комплектов."""
     settings = Settings()
     settings.require_secrets()
     key = settings.api_keys.get("evaluation")
@@ -91,6 +91,7 @@ async def test_real_court_correspondence_and_downloads(with_organization):
             {"X-API-Key": key.get_secret_value()},
             organization,
             settings.job_timeout_seconds,
+            sequential=True,
         )
     path = Path(f"reports/local/correspondence-{with_organization}.json")
     await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
@@ -99,7 +100,7 @@ async def test_real_court_correspondence_and_downloads(with_organization):
     )
     assert report["status"] in {"completed", "completed_with_warnings"}, (
         f"{path}; status={report['status']}; error_code={report['error_code']}; "
-        f"fallback_code={report['fallback_code']}; seconds={report['seconds']}"
+        f"unresolved_pairs={report['unresolved_pairs']}; seconds={report['seconds']}"
     )
     matched = bool(report["checks"]) and all(row["match"] for row in report["checks"])
     assert matched, f"{path}; поля: {mismatch_paths(report['checks'])}"

@@ -12,17 +12,17 @@ from pydantic import ValidationError
 from app.application.analysis import validate_extraction
 from app.domain.errors import IntakeError
 from app.domain.schema import Amount, BatchResult, Classification, Extracted
-from app.domain.segmentation import PageRef, Plan, validate_plan, windows
+from app.domain.segmentation import windows
 from app.domain.taxonomy import LETTER_PATHS, taxonomy_json
 from app.infrastructure.vision import strict_json
-from tests.support import facts, plan_for
+from tests.support import facts, fixed_group
 
 
 def test_one_c_cannot_add_an_unapproved_template_leaf():
     """Справочные поля 1С не обходят закрытый каталог при неизвестном направлении."""
     value = facts()
     value["one_c"]["template_leaf"] = "Произвольный шаблон"
-    group = Plan.model_validate(plan_for([{"file_id": "a", "page_number": 1}])).documents[0]
+    group = fixed_group([{"file_id": "a", "page_number": 1}])
     with pytest.raises(IntakeError):
         validate_extraction(Extracted.model_validate(value), group, None)
 
@@ -30,53 +30,6 @@ def test_one_c_cannot_add_an_unapproved_template_leaf():
 def refs(count=6, file_id="source-a"):
     """Создаёт независимые адреса физических страниц для проверки плана."""
     return [{"file_id": file_id, "page_number": n} for n in range(1, count + 1)]
-
-
-def test_claim_with_four_attachments_is_one_registration():
-    """Шесть страниц претензии образуют один комплект и четыре внутренних приложения."""
-    pages = refs()
-    plan = Plan.model_validate(plan_for(pages, main=2))
-    validate_plan(plan, [PageRef(**p) for p in pages])
-    assert len(plan.documents) == 1
-    assert len(plan.documents[0].attachments) == 4
-
-
-@pytest.mark.parametrize(
-    "mutation",
-    ["missing", "duplicate", "unknown", "nested_duplicate", "order", "review", "unassigned"],
-)
-def test_plan_rejects_integrity_errors(mutation):
-    """Невалидные модельные границы отклоняются без локального семантического исправления."""
-    pages = refs()
-    raw = plan_for(pages, main=2)
-    group = raw["documents"][0]
-    if mutation == "missing":
-        group["pages"] = group["pages"][:-1]
-    elif mutation == "duplicate":
-        group["pages"] = group["pages"] + [pages[0]]
-    elif mutation == "unknown":
-        group["pages"] = group["pages"] + [{"file_id": "foreign", "page_number": 1}]
-    elif mutation == "nested_duplicate":
-        group["main_pages"] = group["main_pages"] + [pages[2]]
-    elif mutation == "order":
-        group["pages"] = list(reversed(group["pages"]))
-    elif mutation == "review":
-        group["status"] = "needs_review"
-    elif mutation == "unassigned":
-        raw["unassigned_pages"] = [pages[-1]]
-    with pytest.raises(IntakeError, match="."):
-        validate_plan(Plan.model_validate(raw), [PageRef(**p) for p in pages])
-
-
-def test_two_independent_letters_keep_all_pages():
-    """Два явных решения VLM не объединяются backend по совпадению контрагента."""
-    pages = refs(4)
-    first, second = plan_for(pages[:2]), plan_for(pages[2:])
-    second["documents"][0]["document_index"] = 2
-    first["documents"].extend(second["documents"])
-    parsed = Plan.model_validate(first)
-    validate_plan(parsed, [PageRef(**p) for p in pages])
-    assert len(parsed.documents) == 2
 
 
 def test_windows_cross_fifty_pages_without_loss():

@@ -6,16 +6,13 @@ import copy
 import pytest
 
 from app.domain.jobs import Job, utcnow
-from app.domain.segmentation import Plan
-from tests.support import facts, plan_for
+from tests.support import facts, fixed_group
 
 
 def packet():
     """Возвращает синтетическую основную страницу и приложение с посторонним OCR."""
     pages = [{"file_id": "source", "page_number": n, "ocr": "UNTRUSTED_OCR_DATE"} for n in (1, 2)]
-    group = Plan.model_validate(
-        plan_for([{"file_id": "source", "page_number": n} for n in (1, 2)], main=1)
-    ).documents[0]
+    group = fixed_group([{"file_id": "source", "page_number": n} for n in (1, 2)], main=1)
     value = facts([{"title": "Приложение", "page_range": [2, 2]}])
     return pages, group, value
 

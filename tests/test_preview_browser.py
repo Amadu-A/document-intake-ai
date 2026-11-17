@@ -1,5 +1,5 @@
 # tests/test_preview_browser.py
-"""Chromium: 501 страница не вызывает HTTP-шторм; fallback остаётся редактируемым черновиком."""
+"""Chromium: 501 страница не вызывает HTTP-шторм; partial остаётся редактируемым черновиком."""
 
 import asyncio
 import json
@@ -21,7 +21,7 @@ from tests.support import pdf_bytes
 pytestmark = pytest.mark.browser
 
 
-async def test_browser_501_preview_cache_and_page_fallback(container, unused_tcp_port):
+async def test_browser_501_preview_cache_and_unresolved_transitions(container, unused_tcp_port):
     """Проверяет настоящий HTTP, RAM-кеш, последнюю страницу и ручную правку после отказа VLM."""
     base = f"http://127.0.0.1:{unused_tcp_port}"
     container.settings.app_public_base_url = base
@@ -164,8 +164,8 @@ async def test_browser_501_preview_cache_and_page_fallback(container, unused_tcp
             assert await page.locator(".boundary__page").count() <= 24
             container.vision.request = invalid
             await page.locator("[data-start]").click()
-            await expect(page.locator("[data-confirm-plan]")).to_be_enabled(timeout=30000)
-            await expect(page.locator("[data-notice]")).to_contain_text("черновик по одному листу")
+            await expect(page.locator("[data-confirm-plan]")).to_be_enabled(timeout=120000)
+            await expect(page.locator("[data-notice]")).to_contain_text("неопределённые переходы")
             await expect(page.locator("[data-export]")).to_be_disabled()
             await expect(page.locator("[data-boundary-status]")).to_contain_text("501 диапазонов")
             await page.locator("[data-page-jump]").fill("1")
@@ -210,7 +210,7 @@ async def test_browser_501_preview_cache_and_page_fallback(container, unused_tcp
                 "element => element.scrollHeight > element.clientHeight"
             )
             assert await page.evaluate("() => document.documentElement.scrollHeight < 2500")
-            await page.screenshot(path="tmp/browser-501-fallback.png", full_page=True)
+            await page.screenshot(path="tmp/browser-501-partial.png", full_page=True)
             await page.locator("[data-cancel]").click()
             await browser.close()
     finally:

@@ -7,13 +7,11 @@ import pytest
 
 from app.application.analysis import validate_extraction
 from app.application.one_c_projection import project_one_c, supported_direction
-from app.domain.compact_plan import CompactPlan, compact
 from app.domain.errors import IntakeError
 from app.domain.extraction import ExtractionDraft
 from app.domain.jobs import Job, utcnow
 from app.domain.schema import Extracted
-from app.domain.segmentation import Plan, validate_plan
-from tests.support import facts, plan_for
+from tests.support import facts, fixed_group
 
 ORGANIZATION = "ООО «Тестовая организация»"
 
@@ -37,7 +35,7 @@ def procedural():
 
 def group():
     """Возвращает фиксированное модельное множество для технической проверки реквизитов."""
-    return Plan.model_validate(plan_for([{"file_id": "source", "page_number": 1}])).documents[0]
+    return fixed_group([{"file_id": "source", "page_number": 1}])
 
 
 def test_nonletter_incoming_preserves_legal_root_and_projects_only_known_fields():
@@ -136,62 +134,6 @@ def test_vlm_cannot_fill_one_c_itself(name):
     setattr(raw.one_c, name, "synthetic-untrusted-value")
     with pytest.raises(IntakeError):
         validate_extraction(raw, group(), ORGANIZATION)
-
-
-def evidence_plan():
-    """Описывает синтетические несмежные конверт/акт без номеров или данных реального примера."""
-    refs = [{"file_id": "source", "page_number": n} for n in (1, 8)]
-    value = plan_for(refs)
-    value["documents"][0]["evidence"] = [
-        {
-            "page": refs[0],
-            "role": "carrier",
-            "identifiers": [{"kind": "court_case", "value": "TEST-17/2026"}],
-            "sender": "Тестовый суд",
-            "recipient": ORGANIZATION,
-        },
-        {
-            "page": refs[1],
-            "role": "main",
-            "identifiers": [{"kind": "court_case", "value": "TEST-17/2026"}],
-            "sender": "Тестовый суд",
-            "recipient": ORGANIZATION,
-        },
-    ]
-    return value, refs
-
-
-def test_noncontiguous_carrier_evidence_survives_compact_plan():
-    """Подтверждённая моделью связь сохраняет страницы и свидетельства при техническом сжатии."""
-    value, refs = evidence_plan()
-    plan = Plan.model_validate(value)
-    validate_plan(plan, plan.documents[0].pages)
-    physical = plan.documents[0].pages
-    restored = CompactPlan.model_validate(compact(plan, physical)).expand(physical)
-    assert restored == plan and len(restored.documents[0].evidence) == 2
-    assert [p.page_number for p in restored.documents[0].pages] == [1, 8]
-
-
-@pytest.mark.parametrize(
-    "problem", ["case_conflict", "no_party", "foreign_page", "duplicate_evidence"]
-)
-def test_carrier_conflicts_are_rejected_without_backend_regrouping(problem):
-    """Backend отказывает неверному свидетельству и оставляет смысловую корректировку VLM."""
-    value, _ = evidence_plan()
-    document = value["documents"][0]
-    if problem == "case_conflict":
-        document["evidence"][1]["identifiers"][0]["value"] = "TEST-99/2026"
-    elif problem == "no_party":
-        document["evidence"][0].update(sender=None, recipient=None)
-    elif problem == "foreign_page":
-        document["evidence"][0]["page"] = {"file_id": "other", "page_number": 1}
-    else:
-        document["evidence"].append(copy.deepcopy(document["evidence"][0]))
-    plan = Plan.model_validate(value)
-    original = plan.model_dump(mode="json")
-    with pytest.raises(IntakeError):
-        validate_plan(plan, plan.documents[0].pages)
-    assert plan.model_dump(mode="json") == original
 
 
 @pytest.mark.parametrize("readable", [False, True])

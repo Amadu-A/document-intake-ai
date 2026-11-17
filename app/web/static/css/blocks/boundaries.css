@@ -45,3 +45,6 @@
 .boundary__save--pending { color: #a16a1e; }
 @media (max-width: 750px) { .mode { flex-direction: column; } .boundary { padding: 12px; } .boundary__heading { align-items: flex-start; } .boundary__source { max-width: 180px; } }
 @media (pointer: coarse) { .boundary__handle { width: 40px; min-height: 48px; right: -18px; } .boundary__handle--left { left: -18px; right: auto; } }
+
+.boundary__page--uncertain { outline: 2px dashed #b45309; }
+.boundary__uncertain { color: #92400e; font-size: .7rem; padding: .25rem; }

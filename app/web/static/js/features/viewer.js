@@ -53,6 +53,16 @@ export function createViewer() {
   document.querySelector("[data-zoom-in]").addEventListener("click", () => setZoom(levels[Math.min(4, levels.indexOf(zoom) + 1)]));
   document.querySelector("[data-zoom-out]").addEventListener("click", () => setZoom(levels[Math.max(0, levels.indexOf(zoom) - 1)]));
   return {
+    reset() {
+      /** Отзывает локальный PDF и не позволяет старому show изменить новый экран. */
+      sequence++; if (localURL) URL.revokeObjectURL(localURL); localURL = null;
+      pages = []; sources = []; selected = 0; setZoom(100); thumbnails.replaceChildren();
+      image.removeAttribute("src"); image.alt = ""; image.hidden = true;
+      local.removeAttribute("data"); local.hidden = true; empty.hidden = false; empty.textContent = "Загрузите документы для просмотра";
+      document.querySelector("[data-page-label]").textContent = "Страницы не загружены";
+      document.querySelector("[data-page-role]").textContent = "";
+      const link = document.querySelector("[data-original]"); link.hidden = true; link.removeAttribute("href");
+    },
     configure(loader, select, describe) { /** Подключает пагинацию и общий выбор редактора. */ load = loader; onSelect = select; role = describe; },
     update(snapshot, refs) {
       /** Применяет метаданные без сброса выбранной физической страницы. */

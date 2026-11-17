@@ -4,15 +4,12 @@
 import asyncio
 import copy
 import hashlib
-import json
 
 import pymupdf
 import pytest
-from sqlalchemy import delete
 
-from app.infrastructure.database import JobRow, SignalRow
 from app.worker import process
-from tests.support import ScriptedVision, facts, pdf_bytes, plan_for
+from tests.support import ScriptedVision, facts, pdf_bytes
 
 KEY = {"X-API-Key": "e" * 48}
 FOREIGN = {"X-API-Key": "f" * 48}
@@ -68,7 +65,7 @@ async def test_mode_change_before_first_claim_keeps_preparation_deliverable(clie
     await container.intake.start(job.id, job.owner)
     await process(container, job.id)
     assert (await container.database.get(job.id)).status == "completed_with_warnings"
-    assert all(c["schema"]["title"] != "Plan" for c in container.vision.calls)
+    assert all(c["schema"]["title"] != "PairAnswer" for c in container.vision.calls)
 
 
 @pytest.mark.parametrize(
@@ -129,7 +126,7 @@ async def test_edit_during_preview_keeps_worker_and_next_command_consistent(
             assert job.status == "queued"
         await process(container, job.id)
         assert (await container.database.get(job.id)).status == "completed_with_warnings"
-        assert all(c["schema"]["title"] != "Plan" for c in container.vision.calls)
+        assert all(c["schema"]["title"] != "PairAnswer" for c in container.vision.calls)
     finally:
         release.set()
         if not worker.done():
@@ -146,7 +143,7 @@ async def test_review_releases_worker_and_confirm_reuses_proposal(client, contai
     assert not await container.database.heartbeat(job_id, job.fence)
     assert job_id not in await container.database.pending()
     assert (await client.get(f"/api/v1/jobs/{job_id}/result", headers=KEY)).status_code == 409
-    assert len(container.vision.calls) == 1
+    assert len(container.vision.calls) == 3
     proposed = copy.deepcopy(job.proposed_plan.model_dump())
     first = await confirm(client, job_id, job.plan_revision)
     second = await confirm(client, job_id, job.plan_revision)
@@ -157,7 +154,7 @@ async def test_review_releases_worker_and_confirm_reuses_proposal(client, contai
     assert completed.status == "completed_with_warnings"
     assert not completed.skip_segmentation and not completed.auto_split
     assert completed.proposed_plan.model_dump() == proposed
-    assert len([c for c in container.vision.calls if c["schema"]["title"] == "Plan"]) == 1
+    assert len([c for c in container.vision.calls if c["schema"]["title"] == "PairAnswer"]) == 3
 
 
 async def test_skip_is_headless_one_registration_per_source_without_segmentation(client, container):
@@ -167,24 +164,18 @@ async def test_skip_is_headless_one_registration_per_source_without_segmentation
     result = await client.get(f"/api/v1/jobs/{data['job_id']}/result", headers=KEY)
     assert result.status_code == 200
     assert [len(source["documents"]) for source in result.json()["files"]] == [1, 1]
-    assert all(c["schema"]["title"] != "Plan" for c in container.vision.calls)
+    assert all(c["schema"]["title"] != "PairAnswer" for c in container.vision.calls)
     assert len(container.vision.calls) == 2
+    job = await container.database.get(data["job_id"])
+    assert not job.comparisons and container.exports.comparisons(job)["total"] == 0
 
 
-async def test_return_to_auto_reuses_vlm_roles_and_original_prompt_snapshots(client, container):
-    """Возврат в auto сохраняет VLM-приложения и неизменяемые промпты уже начатого задания."""
-    container.vision.answers.append(
-        lambda context: plan_for(
-            [
-                {"file_id": page["file_id"], "page_number": page["page_number"]}
-                for page in context["pages"]
-            ],
-            main=2,
-        )
-    )
-    container.vision.answers.append(
-        facts([{"title": "Приложение", "page_range": [n, n]} for n in range(3, 7)])
-    )
+async def test_return_to_auto_reuses_pair_decisions_and_original_prompt_snapshots(
+    client, container
+):
+    """Возврат в auto переиспользует пары; приложения извлекаются внутри фиксированного состава."""
+    attachment_facts = facts([{"title": "Приложение", "page_range": [n, n]} for n in range(3, 7)])
+    container.vision.answers.extend([attachment_facts, attachment_facts])
     data = await create(client, mode={"auto_split": "false", "skip_segmentation": "false"}, pages=6)
     await process(container, data["job_id"])
     job = await container.database.get(data["job_id"])
@@ -204,7 +195,10 @@ async def test_return_to_auto_reuses_vlm_roles_and_original_prompt_snapshots(cli
     completed = await container.database.get(job.id)
     assert completed.status == "completed_with_warnings" and completed.prompts == snapshots
     assert completed.segmentation_source == "vlm_auto"
-    assert len([call for call in container.vision.calls if call["schema"]["title"] == "Plan"]) == 1
+    assert (
+        len([call for call in container.vision.calls if call["schema"]["title"] == "PairAnswer"])
+        == 5
+    )
     assert len(container.vision.calls[-1]["context"]["group"]["main_pages"]) == 2
     assert len(container.vision.calls[-1]["context"]["group"]["attachments"]) == 4
 
@@ -271,7 +265,7 @@ async def test_manual_first_atomic_mode_exclusion_and_fixed_pdf_groups(client, c
         ).json()
         assert manifest["excluded_pages"][0]["page_number"] == 3
         assert hashlib.sha256(download.content).hexdigest() == manifest["sha256"]
-    assert all(call["schema"]["title"] != "Plan" for call in container.vision.calls)
+    assert all(call["schema"]["title"] != "PairAnswer" for call in container.vision.calls)
 
 
 async def test_manual_override_keeps_original_proposal_and_stale_revision_fails(client, container):
@@ -295,7 +289,7 @@ async def test_manual_override_keeps_original_proposal_and_stale_revision_fails(
     assert stale.status_code == 409 and stale.json()["error"]["code"] == "plan_version_conflict"
     await confirm(client, job_id, response.json()["plan_revision"])
     await process(container, job_id)
-    assert len([c for c in container.vision.calls if c["schema"]["title"] == "Plan"]) == 1
+    assert len([c for c in container.vision.calls if c["schema"]["title"] == "PairAnswer"]) == 3
     assert (await segmentation(client, job_id))["proposed_plan"] == original
 
 
@@ -353,12 +347,14 @@ async def test_old_generation_cannot_override_manual_draft_during_vlm(client, co
 
         async def request(self, prompt, context, pages, schema, emit):
             """Позволяет проверить переключение режима во время внешнего семантического вызова."""
-            if schema.get("title") == "Plan" and not entered.is_set():
+            if schema.get("title") == "PairAnswer" and not entered.is_set():
                 entered.set()
                 await release.wait()
             return await super().request(prompt, context, pages, schema, emit)
 
-    container.vision = container.analysis.vision = DelayedVision()
+    container.vision = container.analysis.vision = container.analysis.pairwise.vision = (
+        DelayedVision()
+    )
     data = await create(client)
     job_id = data["job_id"]
     running = asyncio.create_task(process(container, job_id))
@@ -379,76 +375,6 @@ async def test_old_generation_cannot_override_manual_draft_during_vlm(client, co
 async def test_manual_internal_attachments_stay_within_approved_pages(client, container):
     """В skip VLM распознаёт приложения внутри группы без фиктивного первоначального плана."""
     data = await create(client, pages=6, mode={"auto_split": "false", "skip_segmentation": "true"})
-    container.vision.answers.append(facts([{"title": "Приложение", "page_range": [3, 6]}]))
+    container.vision.answers.extend([facts([{"title": "Приложение", "page_range": [3, 6]}])] * 2)
     await process(container, data["job_id"])
     assert (await container.database.get(data["job_id"])).status == "completed_with_warnings"
-
-
-@pytest.mark.parametrize("start", [False, True], ids=["legacy-upload", "legacy-submit"])
-async def test_legacy_idempotency_and_completed_plan_survive_upgrade(client, container, start):
-    """Старая запись допускает повтор ключа, headless start и просмотр готового плана."""
-    payload = pdf_bytes(2)
-    path = "/api/v1/jobs" if start else "/api/v1/uploads"
-    headers = {**KEY, "Idempotency-Key": "legacy-request"}
-    first = await client.post(
-        path, headers=headers, files={"files": ("legacy.pdf", payload, "application/pdf")}
-    )
-    assert first.status_code == 202
-    job_id = first.json()["job_id"]
-    job = await container.database.get(job_id)
-    old_fields = {
-        "id",
-        "owner",
-        "status",
-        "created_at",
-        "expires_at",
-        "deadline_at",
-        "completed_at",
-        "stage",
-        "progress",
-        "attempt",
-        "fence",
-        "sources",
-        "prompts",
-        "organization_hint",
-        "result",
-        "manifest",
-        "error",
-        "cursor",
-    }
-    old_digest = hashlib.sha256(
-        json.dumps(
-            {
-                "sources": [("legacy.pdf", "application/pdf", hashlib.sha256(payload).hexdigest())],
-                "organization": None,
-                "start": start,
-                "prompts": job.prompts if start else {},
-            },
-            sort_keys=True,
-            ensure_ascii=False,
-        ).encode()
-    ).hexdigest()
-    async with container.database.sessions.begin() as session:
-        row = await session.get(JobRow, job_id)
-        row.data = {name: value for name, value in row.data.items() if name in old_fields}
-        row.data = {**row.data, "stage": "upload"}
-        row.digest = old_digest
-        if not start:
-            await session.execute(delete(SignalRow).where(SignalRow.job_id == job_id))
-    repeated = await client.post(
-        path, headers=headers, files={"files": ("legacy.pdf", payload, "application/pdf")}
-    )
-    assert repeated.status_code == 202 and repeated.json()["job_id"] == job_id
-    if not start:
-        assert repeated.json()["stage"] == "upload"
-        await container.intake.start(job_id, job.owner)
-    await process(container, job_id)
-    assert (await container.database.get(job_id)).status == "completed_with_warnings"
-    async with container.database.sessions.begin() as session:
-        row = await session.get(JobRow, job_id)
-        row.data = {name: value for name, value in row.data.items() if name in old_fields}
-    legacy_plan = await segmentation(client, job_id)
-    assert legacy_plan["locked"] and legacy_plan["document_count"] == 1
-    assert legacy_plan["segmentation_source"] == "vlm_auto"
-    assert len(legacy_plan["proposed_plan"]["documents"][0]["pages"]) == 2
-    assert (await client.get(f"/api/v1/jobs/{job_id}/result", headers=KEY)).status_code == 200

@@ -7,7 +7,7 @@ from typing import Protocol
 
 from app.domain.boundaries import ManualPlan
 from app.domain.jobs import Job, Source
-from app.domain.segmentation import PageRef, Plan
+from app.domain.segmentation import PageRef
 
 Emit = Callable[[str, dict], Awaitable[None]]
 
@@ -15,6 +15,8 @@ Emit = Callable[[str, dict], Awaitable[None]]
 class AnalysisSettings(Protocol):
     """Только параметры VLM-оркестрации, необходимые application-слою."""
 
+    pair_concurrency: int
+    pair_max_attempts: int
     model_attempts: int
     vlm_window_pages: int
     vlm_overlap_pages: int
@@ -75,6 +77,10 @@ class JobRepository(Protocol):
         """Выдаёт новое fencing-поколение только доступному заданию."""
         ...
 
+    async def is_active(self, job_id: str, fence: int) -> bool:
+        """Проверяет отзыв поколения для быстрой отмены без продления lease."""
+        ...
+
     async def heartbeat(self, job_id: str, fence: int) -> bool:
         """Продлевает действующий lease; false требует остановить обработку."""
         ...
@@ -103,12 +109,8 @@ class JobRepository(Protocol):
         """Публикует готовность preview и отделяет ожидание сотрудника от рабочего lease."""
         ...
 
-    async def propose(self, job_id: str, fence: int, plan: Plan) -> Job:
+    async def propose(self, job_id: str, fence: int, plan: ManualPlan) -> Job:
         """Сохраняет предложение VLM, не перезаписывая ручное решение нового поколения."""
-        ...
-
-    async def fallback_pages(self, job_id: str, fence: int, reason: str) -> Job:
-        """Предлагает технические одиночные страницы только для обязательной ручной проверки."""
         ...
 
     async def lock_plan(self, job_id: str, fence: int) -> Job:
@@ -182,5 +184,5 @@ class OCR(Protocol):
     """Внешний OCR/layout/table adapter, не определяющий границы документов."""
 
     async def recognize(self, pages: list[dict], emit: Emit) -> list[dict]:
-        """Обогащает страницы Docling-структурой, сохраняя глобальные адреса."""
+        """Возвращает полный ocr_full и ограниченный vision-контекст ocr с глобальными адресами."""
         ...

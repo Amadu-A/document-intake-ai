@@ -6,47 +6,52 @@ from pathlib import Path
 import pymupdf
 import pytest
 
-from app.domain.boundaries import single_page_plan, validate_assignment
-from app.domain.compact_plan import CompactPlan, compact
-from app.domain.segmentation import PageRef, Plan, validate_plan
-from tests.segmentation_support import compare_groups, expected_groups
-from tests.support import plan_for
+from app.domain.boundaries import ManualPlan, validate_assignment
+from app.domain.segmentation import PageRef
+from tests.segmentation_support import compare_groups, expected_groups, sequential_expected
 
 CASES = [
-    ("Полученные_письма_по_почте_рф_06_11_2026", 173, 110),
-    ("суд_ув", 8, 4),
+    ("Полученные_письма_по_почте_рф_06_11_2026", 173, 111),
+    ("суд_ув", 8, 5),
 ]
 
 
 @pytest.mark.private
 @pytest.mark.parametrize("name,pages,groups", CASES)
 def test_private_segmentation_examples_cover_every_physical_page(name, pages, groups):
-    """Проверяет размеры новых PDF и точное сохранение эталона, включая группу 101,103."""
+    """Проверяет подтверждённые последовательные диапазоны отдельно от старых полных JSON."""
     path = Path("examples") / (name + ".pdf")
     if not path.exists():
         pytest.skip("NOT_RUN: приватные примеры недоступны")
     with pymupdf.open(path) as document:
         assert len(document) == pages
-    cut = path.with_name(path.stem + "_cut.json")
-    expected = expected_groups(cut if cut.exists() else path.with_suffix(".json"), pages)
+    expected = sequential_expected(path, pages)
     assert len(expected) == groups
     if pages == 173:
-        assert [101, 103] in expected and [102] in expected
+        assert [101, 103] not in expected and [101] in expected and [102] in expected
     else:
-        assert expected == [[1, 8], [2, 3, 4], [5, 6], [7]]
+        assert expected == [[1], [2, 3, 4], [5, 6], [7], [8]]
     physical = [PageRef(file_id="source", page_number=n) for n in range(1, pages + 1)]
-    documents = []
-    for index, group in enumerate(expected, 1):
-        document = plan_for([physical[n - 1].model_dump() for n in group])["documents"][0]
-        documents.append({**document, "document_index": index})
-    plan = Plan.model_validate({"documents": documents, "unassigned_pages": [], "warnings": []})
-    validate_plan(plan, physical)
-    expanded = CompactPlan.model_validate(compact(plan, physical)).expand(physical)
-    assert expanded == plan
-    validate_assignment(single_page_plan(physical), physical)
+    plan = ManualPlan(
+        documents=[
+            {"client_id": f"manual-{i}", "pages": [physical[n - 1] for n in group]}
+            for i, group in enumerate(expected, 1)
+        ]
+    )
+    validate_assignment(plan, physical)
     assert compare_groups(expected, [[p.page_number for p in d.pages] for d in plan.documents])[
         "match"
     ]
+
+
+def test_new_ground_truth_cannot_be_derived_from_noncontiguous_old_ranges(tmp_path):
+    """Исторический [1,3] не исправляется и не используется как новое модельное ожидание."""
+    pdf = tmp_path / "synthetic.pdf"
+    old = tmp_path / "synthetic_cut.json"
+    old.write_text('{"range":[[1,3],2]}', "utf-8")
+    with pytest.raises(ValueError, match="Несмежный"):
+        sequential_expected(pdf, 3)
+    assert old.read_text("utf-8") == '{"range":[[1,3],2]}'
 
 
 @pytest.mark.parametrize(

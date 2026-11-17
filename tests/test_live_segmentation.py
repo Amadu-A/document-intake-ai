@@ -1,5 +1,5 @@
 # tests/test_live_segmentation.py
-"""Реальные два эталона разделения: точное предложение либо честный постраничный fallback."""
+"""Реальные последовательные эталоны: полнота сравнений и точность проверяются отдельно."""
 
 import asyncio
 import json
@@ -33,11 +33,6 @@ async def test_real_two_new_segmentation_examples():
                 headers={"X-API-Key": key.get_secret_value()},
                 timeout_seconds=settings.job_timeout_seconds,
             )
-            report["safe_fallback"] = (
-                report["segmentation_source"] == "page_fallback"
-                and report["status"] == "awaiting_confirmation"
-                and report["actual"] == [[n] for n in range(1, report["pages"] + 1)]
-            )
             results.append(report)
             await asyncio.to_thread(
                 (directory / "live-segmentation.json").write_text,
@@ -45,6 +40,6 @@ async def test_real_two_new_segmentation_examples():
                 "utf-8",
             )
     assert len(results) == 2
-    assert all(case["match"] or case["safe_fallback"] for case in results), (
-        "Ошибочные границы или неполное покрытие: reports/local/live-segmentation.json"
+    assert all(case["technical_complete"] and case["match"] for case in results), (
+        "Не все сравнения завершены либо есть расхождения: reports/local/live-segmentation.json"
     )

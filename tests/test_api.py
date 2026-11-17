@@ -8,7 +8,7 @@ from datetime import timedelta
 import pymupdf
 import pytest
 
-from tests.support import facts, pdf_bytes, plan_for
+from tests.support import facts, pdf_bytes
 
 KEY = {"X-API-Key": "e" * 48}
 FOREIGN_KEY = {"X-API-Key": "f" * 48}
@@ -58,12 +58,7 @@ async def test_headless_upload_poll_result_download(client, container):
 async def test_two_independent_letters_produce_two_complete_pdfs(client, container):
     """Два явных решения VLM дают две регистрации и два PDF без повторов/потери страниц."""
     job_id = (await submit(client, 2)).json()["job_id"]
-    file_id = (await container.database.get(job_id)).sources[0].file_id
-    first = plan_for([{"file_id": file_id, "page_number": 1}])
-    second = plan_for([{"file_id": file_id, "page_number": 2}])
-    second["documents"][0]["document_index"] = 2
-    first["documents"].extend(second["documents"])
-    container.vision.answers.extend([first, facts(), facts()])
+    container.vision.answers.extend([{"solution": False}, facts(), facts()])
     await run_job(container, job_id)
     result = (await client.get(f"/api/v1/jobs/{job_id}/result", headers=KEY)).json()
     documents = result["files"][0]["documents"]
@@ -157,37 +152,28 @@ async def test_browser_cookie_csrf_and_origin(client):
     ).status_code == 200
 
 
-async def test_missing_pages_trigger_retry_then_unverified_page_draft(client, container):
-    """После ограниченных повторов backend предлагает лишь черновик для явной проверки."""
+async def test_invalid_pair_requires_review_without_result(client, container):
+    """После ограниченных повторов переход остаётся неизвестным, экспорт недоступен."""
     response = await submit(client, 2)
     job_id = response.json()["job_id"]
-    job = await container.database.get(job_id)
-    bad = plan_for([{"file_id": job.sources[0].file_id, "page_number": 1}])
-    container.vision.answers.extend([bad, bad])
+    container.vision.answers.extend([{"solution": "true"}] * container.settings.pair_max_attempts)
     await run_job(container, job_id)
     status = (await client.get(f"/api/v1/jobs/{job_id}", headers=KEY)).json()
     assert status["status"] == "awaiting_confirmation"
-    assert status["segmentation_source"] == "page_fallback"
-    assert status["segmentation_fallback"]["code"] == "invalid_segmentation"
+    assert status["segmentation_source"] == "vlm_partial"
+    assert status["comparisons"]["errors"] == 1
     assert status["error"] is None and not status["plan_locked"]
     assert status["sources"][0]["file_url"].startswith("http://testserver/api/")
     assert (await client.get(f"/api/v1/jobs/{job_id}/result", headers=KEY)).status_code == 409
 
 
-async def test_invalid_plan_is_retried_with_feedback(client, container):
-    """Повторный запрос получает список ошибок, после корректного ответа обработка завершается."""
+async def test_invalid_pair_is_retried_independently_with_same_two_pages(client, container):
+    """Повтор получает те же две страницы; корректный boolean позволяет продолжить обработку."""
     response = await submit(client, 2)
     job_id = response.json()["job_id"]
-    file_id = (await container.database.get(job_id)).sources[0].file_id
-    container.vision.answers.extend(
-        [
-            plan_for([{"file_id": file_id, "page_number": 1}]),
-            plan_for([{"file_id": file_id, "page_number": n} for n in (1, 2)]),
-            facts(),
-        ]
-    )
+    container.vision.answers.extend([{"solution": "true"}, {"solution": True}, facts()])
     await run_job(container, job_id)
-    assert container.vision.calls[1]["context"]["validation_errors"]
+    assert container.vision.calls[1]["context"] == container.vision.calls[0]["context"]
     assert (await container.database.get(job_id)).status == "completed_with_warnings"
 
 
@@ -195,8 +181,6 @@ async def test_claim_with_four_attachments_exports_six_pages(client, container):
     """Регрессия структуры 4-2591: один документ, четыре приложения, PDF из шести страниц."""
     response = await submit(client, 6)
     job_id = response.json()["job_id"]
-    file_id = (await container.database.get(job_id)).sources[0].file_id
-    refs = [{"file_id": file_id, "page_number": n} for n in range(1, 7)]
     attachments = [
         {
             "title": f"Приложение {n}",
@@ -206,7 +190,7 @@ async def test_claim_with_four_attachments_exports_six_pages(client, container):
         }
         for n in range(3, 7)
     ]
-    container.vision.answers.extend([plan_for(refs, 2), facts(attachments)])
+    container.vision.answers.extend([facts(attachments), facts(attachments)])
     await run_job(container, job_id)
     result = (await client.get(f"/api/v1/jobs/{job_id}/result", headers=KEY)).json()
     documents = result["files"][0]["documents"]

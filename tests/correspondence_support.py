@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from collections import Counter
+from copy import deepcopy
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -278,6 +279,8 @@ async def run_correspondence(
     headers: dict,
     organization: str | None,
     timeout_seconds: int,
+    *,
+    sequential: bool = False,
 ) -> dict:
     """Прогоняет новый API с настоящими или явно тестовыми адаптерами и проверяет скачанные PDF."""
     golden = json.loads(await asyncio.to_thread(expected.read_text, "utf-8"))
@@ -312,7 +315,7 @@ async def run_correspondence(
         "status": status["status"],
         "organization": organization,
         "error_code": (status.get("error") or {}).get("code"),
-        "fallback_code": (status.get("segmentation_fallback") or {}).get("code"),
+        "unresolved_pairs": status.get("comparisons", {}).get("errors", 0),
         "seconds": round(monotonic() - began, 2),
         "checks": [],
     }
@@ -321,7 +324,33 @@ async def run_correspondence(
     response = await client.get(f"/api/v1/jobs/{identifier}/result", headers=headers)
     response.raise_for_status()
     result = BatchResult.model_validate(response.json()).model_dump(mode="json")
-    report["checks"] = compare_correspondence(golden, result, organization)
+    if sequential:
+        # Исторический комплект [1,8] нельзя копировать в два новых эталона фактов.
+        # Сравниваются только неизменившиеся группы; все PDF проверяются ниже отдельно.
+        wanted, received = deepcopy(golden), deepcopy(result)
+        for file in wanted["files"]:
+            file["documents"] = [
+                d for d in file["documents"] if d["pages"] in [[2, 3, 4], [5, 6], [7]]
+            ]
+        for file in received["files"]:
+            file["documents"] = [
+                d for d in file["documents"] if d["pages"] in [[2, 3, 4], [5, 6], [7]]
+            ]
+        report["checks"] = compare_correspondence(wanted, received, organization)
+        actual = [d["pages"] for f in result["files"] for d in f["documents"]]
+        expected_ranges = [[1], [2, 3, 4], [5, 6], [7], [8]]
+        report["checks"].append(
+            {
+                "pages": None,
+                "field": "sequential_boundaries",
+                "expected": expected_ranges,
+                "actual": actual,
+                "match": actual == expected_ranges,
+            }
+        )
+        report["facts_without_separate_golden"] = [[1], [8]]
+    else:
+        report["checks"] = compare_correspondence(golden, result, organization)
     # Сырой result остаётся только в private отчёте вызывающего runner, без токенов.
     report["documents"] = [
         {

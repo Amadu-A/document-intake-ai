@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 
 from app.domain.errors import IntakeError
 from tests.live_support import run_comparison
-from tests.support import SyntheticOCR, facts, pdf_bytes, plan_for
+from tests.support import SyntheticOCR, facts, pdf_bytes
 
 KEY = {"X-API-Key": "e" * 48}
 
@@ -129,23 +129,12 @@ async def test_runner_matches_reversed_artifacts_by_document_id(
     case = comparison_case("two-letters.pdf", pages=3, registrations=2, expected="FIRST")
     (tmp_path / case["file"]).write_bytes(pdf_bytes(3))
 
-    def two_documents(context):
-        """Возвращает две явные группы разного размера для различимых PDF hashes."""
-        refs = [
-            {"file_id": page["file_id"], "page_number": page["page_number"]}
-            for page in context["pages"]
-        ]
-        first, second = plan_for(refs[:1]), plan_for(refs[1:])
-        second["documents"][0]["document_index"] = 2
-        first["documents"].extend(second["documents"])
-        return first
-
     first, second = facts(), facts()
     first["requisites"]["document_number"], second["requisites"]["document_number"] = (
         "FIRST",
         "SECOND",
     )
-    container.vision.answers.extend([two_documents, first, second])
+    container.vision.answers.extend([{"solution": False}, {"solution": True}, first, second])
     original = container.exports.status
 
     def reversed_artifacts(job, include_pages=True):
@@ -201,24 +190,12 @@ async def test_runner_checks_exact_claim_main_and_attachments(
     case = comparison_case("4-2591.pdf", pages=6, attachments=4)
     (tmp_path / case["file"]).write_bytes(pdf_bytes(6))
 
-    def claim(context):
-        """Имитирует корректный либо семантически неверный, но технически целостный VLM-план."""
-        refs = [
-            {"file_id": page["file_id"], "page_number": page["page_number"]}
-            for page in context["pages"]
-        ]
-        plan = plan_for(refs, main=2)
-        if wrong_boundaries:
-            plan["documents"][0]["main_pages"] = refs[:1]
-            plan["documents"][0]["attachments"][0]["pages"] = refs[1:3]
-        return plan
-
     attachments = [
         {"title": "Synthetic attachment", "page_range": [number, number]} for number in (3, 4, 5, 6)
     ]
     if wrong_boundaries:
         attachments[0]["page_range"] = [2, 3]
-    container.vision.answers.extend([claim, facts(attachments)])
+    container.vision.answers.extend([facts(attachments), facts(attachments)])
     client.event_hooks["response"].append(local_worker_hook(container))
     report = await run_comparison(
         client,

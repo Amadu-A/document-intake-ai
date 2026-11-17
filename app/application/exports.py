@@ -7,15 +7,13 @@ from datetime import timedelta
 from app.application.intake import Intake
 from app.application.ports import DownloadSigner
 from app.domain.boundaries import (
-    draft_from_vlm,
-    single_page_plan,
     source_file_plan,
     validate_assignment,
 )
+from app.domain.comparisons import ALGORITHM_VERSION, adjacent_comparisons
 from app.domain.errors import IntakeError
 from app.domain.jobs import TERMINAL, Job, utcnow
 from app.domain.schema import BatchResult
-from app.domain.segmentation import Plan
 
 
 class Exports:
@@ -46,10 +44,6 @@ class Exports:
         physical = job.page_refs()
         draft = job.draft_plan
         proposal = job.proposed_plan
-        if proposal is None and draft is None and job.manifest.get("plan"):
-            # Готовые задания прежней версии уже содержат проверенный Plan в manifest.
-            proposal = Plan.model_validate(job.manifest["plan"])
-            draft = draft_from_vlm(proposal)
         can_confirm = False
         if job.preview_complete and not job.plan_locked and draft is not None:
             try:
@@ -61,21 +55,11 @@ class Exports:
                 pass
         assigned = sum(len(d.pages) for d in draft.documents) if draft else 0
         excluded = len(draft.excluded_pages) if draft else 0
-        initial = (
-            draft_from_vlm(proposal)
-            if proposal
-            else (
-                single_page_plan(physical)
-                if job.manifest.get("segmentation_fallback")
-                else source_file_plan(physical)
-            )
-        )
+        initial = proposal or source_file_plan(physical)
         return {
             "auto_split": job.auto_split,
             "skip_segmentation": job.skip_segmentation,
-            "segmentation_source": "vlm_auto"
-            if proposal and job.proposed_plan is None
-            else job.segmentation_source,
+            "segmentation_source": job.segmentation_source,
             "plan_revision": job.plan_revision,
             "approved_revision": job.approved_revision,
             "locked": job.plan_locked or job.status in TERMINAL,
@@ -91,7 +75,25 @@ class Exports:
             if job.approved_plan
             else None,
             "initial_plan": initial.model_dump(mode="json"),
-            "fallback": job.manifest.get("segmentation_fallback"),
+            "comparisons": self.comparisons(job),
+        }
+
+    def comparisons(self, job: Job) -> dict:
+        """Показывает прогресс и неизвестные переходы без OCR и его отпечатков."""
+        expected = (
+            adjacent_comparisons(job.page_refs())
+            if job.algorithm_version == ALGORITHM_VERSION
+            and (not job.skip_segmentation or job.comparisons)
+            else []
+        )
+        saved = {pair.index: pair for pair in job.comparisons}
+        pairs = [saved.get(pair.index, pair) for pair in expected]
+        return {
+            "total": len(pairs),
+            "completed": sum(p.status == "completed" for p in pairs),
+            "errors": sum(p.status == "unresolved" for p in pairs),
+            "needs_review": job.segmentation_source == "vlm_partial",
+            "transitions": [p.model_dump(mode="json", exclude={"fingerprint"}) for p in pairs],
         }
 
     def page_slice(self, job: Job, offset: int = 0, limit: int = 60) -> dict:
@@ -176,7 +178,7 @@ class Exports:
             "cursor": job.cursor,
             "error": job.error,
             "organization_hint": job.organization_hint,
-            "segmentation_fallback": job.manifest.get("segmentation_fallback"),
+            "comparisons": self.comparisons(job),
             "sources": sources,
             "pages": pages,
             "artifacts": artifacts,
@@ -212,6 +214,8 @@ class Exports:
 
     def event_data(self, job: Job, kind: str, data: dict, include_pages: bool = True) -> dict:
         """Удаляет приватные пути из событий; новый SSE клиент не получает полный реестр PNG."""
+        if kind in {"pair_started", "pair_result"}:
+            return {k: v for k, v in data.items() if k != "fingerprint"}
         if kind == "normalized":
             return {
                 "pages": self.status(job, include_pages)["pages"],

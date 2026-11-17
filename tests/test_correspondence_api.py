@@ -6,8 +6,9 @@ import hashlib
 import pymupdf
 import pytest
 
+from app.domain.boundaries import ManualPlan
 from tests.live_support import run_comparison
-from tests.support import facts, pdf_bytes, plan_for
+from tests.support import facts, pdf_bytes
 from tests.test_api import FOREIGN_KEY, KEY, run_job
 from tests.test_correspondence_projection import ORGANIZATION, procedural
 from tests.test_live_support import comparison_case, local_worker_hook
@@ -30,14 +31,17 @@ async def test_organization_context_and_noncontiguous_pdfs_through_rest(
     assert response.json()["organization_hint"] == organization
     file_id = (await container.database.get(job_id)).sources[0].file_id
     groups = [[1, 8], [2, 3, 4], [5, 6], [7]]
-    plan = {"documents": [], "unassigned_pages": [], "warnings": []}
-    answers = []
-    for index, numbers in enumerate(groups, 1):
-        document = plan_for([{"file_id": file_id, "page_number": n} for n in numbers])["documents"][
-            0
+    plan = ManualPlan(
+        documents=[
+            {
+                "client_id": f"manual-{i}",
+                "pages": [{"file_id": file_id, "page_number": n} for n in numbers],
+            }
+            for i, numbers in enumerate(groups)
         ]
-        document["document_index"] = index
-        plan["documents"].append(document)
+    )
+    answers = []
+    for index, _numbers in enumerate(groups, 1):
         value = procedural().model_dump(mode="json") if index < 4 else facts()
         value["requisites"]["sender"]["name"] = "Синтетический отправитель"
         value["requisites"]["recipient"]["name"] = ORGANIZATION
@@ -51,11 +55,21 @@ async def test_organization_context_and_noncontiguous_pdfs_through_rest(
             ]
             value["classification"].update(template_path=path, document_kind=path[-1])
         answers.append(value)
+    # Несмежные связи разрешены только явным ручным составом.
     if endpoint == "uploads":
         await run_job(container, job_id)
-        response = await client.post(f"/api/v1/jobs/{job_id}/start", headers=KEY)
-        assert response.status_code == 202
-    container.vision.answers.extend([plan, *answers])
+    else:
+        claimed = await container.database.claim(job_id)
+        await container.analysis._prepared(
+            claimed,
+            lambda kind, data: container.database.checkpoint(job_id, claimed.fence, kind, data),
+        )
+    job = await container.database.get(job_id)
+    changed = await container.database.save_draft(
+        job_id, job.owner, job.plan_revision, plan, "manual"
+    )
+    await container.boundaries.confirm(job_id, job.owner, changed.plan_revision)
+    container.vision.answers.extend(answers)
     await run_job(container, job_id)
     snapshot = (await client.get(f"/api/v1/jobs/{job_id}/snapshot", headers=KEY)).json()
     assert "footer_preview" not in str(snapshot)
@@ -88,7 +102,7 @@ async def test_organization_context_and_noncontiguous_pdfs_through_rest(
             assert len(pdf) == len(groups[index])
             assert all(f"PAGE {n}" in pdf[i].get_text() for i, n in enumerate(groups[index]))
     assert all(
-        call["context"]["organization_hint"] == organization for call in container.vision.calls[1:]
+        call["context"]["organization_hint"] == organization for call in container.vision.calls
     )
     assert (
         await client.get(f"/api/v1/jobs/{job_id}/snapshot", headers=FOREIGN_KEY)
@@ -100,18 +114,12 @@ async def test_live_runner_reports_review_immediately_instead_of_waiting_for_dea
 ):
     """Неподтверждённый план фиксируется ошибкой матрицы без автоподтверждения и долгого polling."""
 
-    def uncertain(context):
-        """VLM явно сомневается в synthetic плане."""
-        plan = plan_for(
-            [{"file_id": p["file_id"], "page_number": p["page_number"]} for p in context["pages"]]
-        )
-        plan["documents"][0]["status"] = "needs_review"
-        return plan
-
-    container.vision.answers.append(uncertain)
+    container.vision.answers.extend(
+        [{"solution": "invalid"}] * container.settings.pair_max_attempts
+    )
     client.event_hooks["response"].append(local_worker_hook(container))
     source = tmp_path / "synthetic.pdf"
-    source.write_bytes(pdf_bytes())
+    source.write_bytes(pdf_bytes(2))
     report = await run_comparison(
         client,
         [comparison_case(source.name)],

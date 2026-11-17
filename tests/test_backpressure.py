@@ -11,7 +11,7 @@ import pymupdf
 import pytest
 from pydantic import SecretStr
 
-from app.domain.errors import IntakeError, LeaseLost
+from app.domain.errors import IntakeError
 from app.domain.jobs import utcnow
 from app.infrastructure.docling import DoclingOCR, retry_delay
 from app.worker import process
@@ -187,70 +187,6 @@ async def test_docling_cancellation_interrupts_retry_wait(settings, tmp_path):
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(task, 1)
     assert len(calls) == 1
-
-
-async def test_invalid_segmentation_becomes_reviewable_pages_without_extraction(client, container):
-    """Ошибки VLM не выдаются за успех: одиночные страницы ждут сохранённого подтверждения."""
-    original = container.vision.request
-
-    async def invalid(prompt, context, pages, schema, emit):
-        """Повторяемая ошибка покрытия воспроизводит отказ автоматического разделения."""
-        if schema["title"] == "Plan":
-            return {"documents": [], "unassigned_pages": [], "warnings": []}
-        return await original(prompt, context, pages, schema, emit)
-
-    container.vision.request = invalid
-    response = await client.post(
-        "/api/v1/jobs", headers=KEY, files={"files": ("three.pdf", pdf_bytes(3), "application/pdf")}
-    )
-    identifier = response.json()["job_id"]
-    await process(container, identifier)
-    job = await container.database.get(identifier)
-    assert job.status == "awaiting_confirmation" and job.segmentation_source == "page_fallback"
-    assert not job.plan_locked and job.result is None and len(job.draft_plan.documents) == 3
-    assert not container.vision.calls and not await container.database.pending()
-    assert (await client.get(f"/api/v1/jobs/{identifier}/result", headers=KEY)).status_code == 409
-    assert (await client.post(f"/api/v1/jobs/{identifier}/start", headers=KEY)).status_code == 409
-    with pytest.raises(LeaseLost):
-        await container.database.fallback_pages(job.id, job.fence - 1, "invalid_segmentation")
-    response = await client.post(
-        f"/api/v1/jobs/{identifier}/segmentation/confirm",
-        headers=KEY,
-        json={"expected_revision": job.plan_revision},
-    )
-    assert response.status_code == 202
-    await process(container, identifier)
-    completed = await container.database.get(identifier)
-    assert completed.status == "completed_with_warnings"
-    assert len(completed.manifest["documents"]) == 3
-    assert all(call["schema"]["title"] == "ExtractionDraft" for call in container.vision.calls)
-
-
-async def test_segmentation_time_budget_and_review_do_not_require_docling(client, container):
-    """Недоступный OCR не блокирует разметку; бюджет VLM заканчивается черновиком, а не успехом."""
-    container.settings.vlm_segmentation_timeout_seconds = 0.02
-
-    async def unavailable(pages, emit):
-        """Любой OCR-вызов до утверждения является нарушением этапов."""
-        raise AssertionError("OCR before plan confirmation")
-
-    async def slow(prompt, context, pages, schema, emit):
-        """Длинный vision-запрос должен отмениться по отдельному бюджету разделения."""
-        await asyncio.sleep(60)
-
-    container.analysis.ocr.recognize = unavailable
-    container.vision.request = slow
-    response = await client.post(
-        "/api/v1/jobs",
-        headers=KEY,
-        files={"files": ("two.pdf", pdf_bytes(2), "application/pdf")},
-    )
-    identifier = response.json()["job_id"]
-    await asyncio.wait_for(process(container, identifier), 10)
-    job = await container.database.get(identifier)
-    assert job.status == "awaiting_confirmation"
-    assert job.manifest["segmentation_fallback"]["code"] == "segmentation_timeout"
-    assert len(job.draft_plan.documents) == 2 and not job.result
 
 
 async def test_noncontiguous_manual_pdf_excludes_foreign_middle_page(client, container):

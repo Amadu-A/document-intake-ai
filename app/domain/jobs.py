@@ -7,9 +7,10 @@ from typing import Literal
 from pydantic import Field
 
 from app.domain.boundaries import ApprovedPlan, ManualPlan, SegmentationSource
+from app.domain.comparisons import ALGORITHM_VERSION, Comparison
 from app.domain.errors import IntakeError
 from app.domain.schema import StrictModel
-from app.domain.segmentation import PageRef, Plan
+from app.domain.segmentation import PageRef
 
 TERMINAL = frozenset({"completed", "completed_with_warnings", "failed", "cancelled"})
 JobStatus = Literal[
@@ -67,7 +68,9 @@ class Job(StrictModel):
     segmentation_source: SegmentationSource = "source_files"
     plan_revision: int = 0
     approved_revision: int | None = None
-    proposed_plan: Plan | None = None
+    proposed_plan: ManualPlan | None = None
+    algorithm_version: str = ALGORITHM_VERSION
+    comparisons: list[Comparison] = Field(default_factory=list)
     draft_plan: ManualPlan | None = None
     approved_plan: ApprovedPlan | None = None
     plan_locked: bool = False

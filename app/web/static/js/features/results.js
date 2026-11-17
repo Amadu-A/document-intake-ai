@@ -32,7 +32,7 @@ export function renderPlan(snapshot, viewer) {
   document.querySelector("[data-count-documents]").textContent = documents.length || "—";
   document.querySelector("[data-count-attachments]").textContent = documents.length ? count : "—";
   document.querySelector("[data-structure-status]").textContent = documents.length ?
-    `${documents.length} регистрационных документов · ${count} приложений · ${segmentation?.locked ? "состав заблокирован" : "черновик состава"}${documents.length > 60 ? " · показаны первые 60, остальные доступны через ленту" : ""}` : "Здесь появится состав документов";
+    `${documents.length} ${segmentation?.locked ? "регистрационных документов" : "диапазонов черновика"} · ${count} приложений · ${segmentation?.locked ? "состав заблокирован" : "черновик состава"}${documents.length > 60 ? " · показаны первые 60, остальные доступны через ленту" : ""}` : "Здесь появится состав документов";
 }
 
 export function renderFacts(result) {

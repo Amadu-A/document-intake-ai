@@ -240,7 +240,12 @@ class DoclingOCR:
             ):
                 return None
             context = vision_context(json.loads(raw))
-            return {**page, "ocr": context[:20000], "ocr_truncated": len(context) > 20000}
+            return {
+                **page,
+                "ocr": context[:20000],
+                "ocr_full": context,
+                "ocr_truncated": len(context) > 20000,
+            }
         except (OSError, ValueError, KeyError, TypeError):
             return None
 
@@ -409,7 +414,12 @@ class DoclingOCR:
                         },
                     )
                 output.append(
-                    {**page, "ocr": context[:20000], "ocr_truncated": len(context) > 20000}
+                    {
+                        **page,
+                        "ocr": context[:20000],
+                        "ocr_full": context,
+                        "ocr_truncated": len(context) > 20000,
+                    }
                 )
             if self.settings.docling_async:
                 task_path = self.tasks.path(pages, [self._cache_key(p) for p in pages])

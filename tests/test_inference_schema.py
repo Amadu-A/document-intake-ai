@@ -11,9 +11,9 @@ from app.application.inference_schema import extraction_schema
 from app.domain.errors import IntakeError
 from app.domain.jobs import Job, utcnow
 from app.domain.schema import BatchResult, DocumentRoot, Extracted
-from app.domain.segmentation import Plan, windows
+from app.domain.segmentation import windows
 from app.domain.taxonomy import LETTER_PATHS
-from tests.support import facts, plan_for
+from tests.support import facts, fixed_group
 
 
 def test_public_json_10_schema_keeps_versioned_contract():
@@ -94,7 +94,7 @@ def test_inference_schema_requires_all_fields_without_changing_nullable_types():
 async def test_all_extraction_requests_use_context_schema(container, page_count):
     """Одинаковые ограничения передаются первичному, оконным и согласующему VLM-запросам."""
     pages = [{"file_id": "source-a", "page_number": n} for n in range(1, page_count + 1)]
-    group = Plan.model_validate(plan_for(pages)).documents[0]
+    group = fixed_group(pages)
     chunk_count = len(windows(pages, 8, 2))
     request_count = 1 if chunk_count == 1 else chunk_count + 1
     container.vision.answers.extend(facts() for _ in range(request_count))
@@ -120,7 +120,7 @@ async def test_all_extraction_requests_use_context_schema(container, page_count)
 async def test_schema_override_does_not_bypass_python_validation(container):
     """Если upstream игнорирует суженную схему, ложное направление отклоняется без исправления."""
     pages = [{"file_id": "source-a", "page_number": 1}]
-    group = Plan.model_validate(plan_for(pages)).documents[0]
+    group = fixed_group(pages)
     invalid = facts()
     path = next(path for path in sorted(LETTER_PATHS) if path[1] == "Входящее письмо")
     invalid["classification"].update(

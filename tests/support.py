@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pymupdf
 
+from app.domain.boundaries import AttachmentPages, FixedGroup
 from app.domain.schema import Classification, Extracted, OneC, Recognition, Requisites
 
 
@@ -38,28 +39,18 @@ def facts(attachments: list | None = None) -> dict:
     return value.model_dump(mode="json")
 
 
-def plan_for(refs: list[dict], main: int | None = None) -> dict:
-    """Создаёт явный ожидаемый план одного комплекта; не используется production-кодом."""
+def fixed_group(refs: list[dict], main: int | None = None) -> FixedGroup:
+    """Задаёт физический состав extraction в тесте без семантического Plan."""
     main = len(refs) if main is None else main
-    return {
-        "documents": [
-            {
-                "document_index": 1,
-                "pages": refs,
-                "main_pages": refs[:main],
-                "probable_kind": "Письмо",
-                "attachments": [
-                    {"kind": "Приложение", "pages": [ref], "relation": "listed_attachment"}
-                    for ref in refs[main:]
-                ],
-                "confidence": None,
-                "reason": "Тестовый ответ VLM",
-                "status": "verified",
-            }
+    return FixedGroup(
+        document_index=1,
+        pages=refs,
+        main_pages=refs[:main],
+        attachments=[
+            AttachmentPages(kind="Приложение", pages=[ref], relation="listed_attachment")
+            for ref in refs[main:]
         ],
-        "unassigned_pages": [],
-        "warnings": [],
-    }
+    )
 
 
 class MemoryUpload:
@@ -130,6 +121,17 @@ class ScriptedVision:
                 "source_page": None,
                 "warnings": [],
             }
+        if schema.get("title") == "PairAnswer":
+            if self.answers and (
+                callable(self.answers[0])
+                or isinstance(self.answers[0], Exception)
+                or "solution" in self.answers[0]
+            ):
+                answer = self.answers.popleft()
+                if isinstance(answer, Exception):
+                    raise answer
+                return answer(context) if callable(answer) else answer
+            return {"solution": True}
         if self.answers:
             answer = self.answers.popleft()
             if isinstance(answer, Exception):
@@ -138,11 +140,6 @@ class ScriptedVision:
             if "primary_readability" in schema.get("properties", {}) and isinstance(value, dict):
                 value = self.readability(value)
             return value
-        if schema.get("title") == "Plan":
-            refs = [
-                {"file_id": p["file_id"], "page_number": p["page_number"]} for p in context["pages"]
-            ]
-            return plan_for(refs)
         value = facts()
         return (
             self.readability(value)

@@ -9,18 +9,17 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
-from app.application.inference_schema import extraction_schema, segmentation_schema
+from app.application.inference_schema import extraction_schema
 from app.application.one_c_projection import (
     canonical_organization,
     project_one_c,
     supported_direction,
 )
+from app.application.pairwise import Pairwise
 from app.application.ports import OCR, AnalysisSettings, Emit, JobRepository, Storage, Vision
-from app.application.reconciliation import reconcile
 from app.application.related_dates import review_court_dates
-from app.core.observability import timed
-from app.domain.boundaries import FixedGroup
-from app.domain.compact_plan import CompactPlan, page_spans
+from app.core.observability import report_failure, timed
+from app.domain.boundaries import AttachmentPages, FixedGroup
 from app.domain.errors import IntakeError, LeaseLost
 from app.domain.extraction import ExtractionDraft, PrimaryDateReading
 from app.domain.jobs import Job
@@ -32,7 +31,7 @@ from app.domain.schema import (
     Extracted,
     SourceFile,
 )
-from app.domain.segmentation import PageRef, Plan, Segment, validate_plan, windows
+from app.domain.segmentation import PageRef, page_spans, windows
 from app.domain.taxonomy import taxonomy_json
 
 
@@ -49,9 +48,7 @@ def page_context(pages: list[dict]) -> list[dict]:
     ]
 
 
-def validate_extraction(
-    facts: Extracted, group: Segment | FixedGroup, organization: str | None
-) -> None:
+def validate_extraction(facts: Extracted, group: FixedGroup, organization: str | None) -> None:
     """Проверяет контекст направления и сохранность приложений без подмены модельных фактов."""
     organization = canonical_organization(organization)
     if not organization and facts.classification.direction is not None:
@@ -127,19 +124,6 @@ def validate_extraction(
                 )
             used.update(numbers)
         return
-    expected = []
-    for attachment in group.attachments:
-        if attachment.pages and all(p.file_id == primary for p in attachment.pages):
-            numbers = [p.page_number for p in attachment.pages]
-            if numbers == list(range(min(numbers), max(numbers) + 1)):
-                expected.append([min(numbers), max(numbers)])
-    actual = [a.page_range for a in facts.requisites.attachments if a.page_range]
-    if sorted(expected) != sorted(actual):
-        raise IntakeError(
-            "schema_validation_failed", "Приложения не соответствуют проверенному плану"
-        )
-    if len(facts.requisites.attachments) < len(group.attachments):
-        raise IntakeError("schema_validation_failed", "Модель потеряла сведения о приложениях")
 
 
 class Analyze:
@@ -156,6 +140,7 @@ class Analyze:
         """Получает зависимости; транспорт и конкретные драйверы здесь не создаются."""
         self.repository, self.storage, self.vision = repository, storage, vision
         self.ocr, self.settings = ocr, settings
+        self.pairwise = Pairwise(repository, vision, settings)
 
     async def _validated(
         self,
@@ -177,8 +162,6 @@ class Analyze:
             uncertain_fields.update(
                 ExtractionDraft.model_validate(context["candidate"]).uncertain_fields()
             )
-        if schema is None and model in {Plan, CompactPlan}:
-            schema = segmentation_schema(model)
         for attempt in range(1, self.settings.model_attempts + 1):
             try:
                 request_schema = model.model_json_schema() if schema is None else schema
@@ -255,74 +238,13 @@ class Analyze:
             last_code, "Модель не вернула проверенный результат после ограниченных повторов"
         )
 
-    async def _plan(self, job: Job, pages: list[dict], emit: Emit) -> Plan:
-        """VLM анализирует окна с перекрытием и сама согласует окончательный глобальный план."""
-        chunks = windows(pages, self.settings.vlm_window_pages, self.settings.vlm_overlap_pages)
-        proposals = []
-        for index, chunk in enumerate(chunks):
-            refs = [PageRef(file_id=p["file_id"], page_number=p["page_number"]) for p in chunk]
-            plan = await self._validated(
-                job.prompts["segmentation"],
-                {
-                    "task": "window_segmentation",
-                    "pages": page_context(chunk),
-                    "window_index": index,
-                    "window_count": len(chunks),
-                    "instruction": "Границы окна могут продолжаться за его пределами. "
-                    "Сейчас распределяй только страницы данного окна; итог решается отдельно. "
-                    "Связанные листы могут быть разделены произвольным числом чужих страниц. "
-                    "Состав одной регистрации может быть несмежным; чужие листы не включай в неё. "
-                    "Одинаковая форма уведомлений сама по себе не объединяет разные уведомления. "
-                    "reason — одно короткое предложение; сомнительные границы — needs_review.",
-                },
-                chunk,
-                Plan,
-                lambda p, refs=refs: validate_plan(p, refs, require_verified=False),
-                emit,
-            )
-            proposals.append(plan.model_dump(mode="json"))
-        if len(chunks) == 1:
-            return plan
-        if len(pages) > max(
-            64, self.settings.vlm_window_pages * self.settings.vlm_reconciliation_windows
-        ):
-            return await reconcile(
-                self, job, pages, [Plan.model_validate(p) for p in proposals], emit
-            )
-        refs = [PageRef(file_id=p["file_id"], page_number=p["page_number"]) for p in pages]
-        return await self._validated(
-            job.prompts["segmentation"],
-            {
-                "task": "global_reconciliation",
-                "pages": [p.model_dump() for p in refs],
-                "window_proposals": proposals,
-                "page_evidence": [
-                    {
-                        "file_id": p["file_id"],
-                        "page_number": p["page_number"],
-                        "ocr": p.get("ocr", "")[:500],
-                    }
-                    for p in pages
-                ],
-                "instruction": "Прими глобальное решение, согласуй пересечения и продолжения. "
-                "Не повторяй страницы перекрытия. Только ты определяешь границы.",
-            },
-            [],
-            Plan,
-            lambda p: validate_plan(p, refs, require_verified=False),
-            emit,
-        )
-
     async def _extract(
-        self, job: Job, group: Segment | FixedGroup, pages: list[dict], emit: Emit
+        self, job: Job, group: FixedGroup, pages: list[dict], emit: Emit
     ) -> Extracted:
         """Извлекает факты всей группы; большие комплекты согласует повторным VLM-проходом."""
         organization = canonical_organization(job.organization_hint)
         schema = extraction_schema(organization)
-        first_main = next(
-            (e.page for e in getattr(group, "evidence", []) if e.role == "main"),
-            next(iter(group.main_pages or group.pages)),
-        )
+        first_main = next(iter(group.main_pages or group.pages))
         context = {
             "organization_hint": organization,
             "footer_details": True,
@@ -341,7 +263,7 @@ class Analyze:
             "Неизвестное направление не меняет род письма: оно остаётся перепиской. "
             "Определи сам документ, а не род упомянутого в нём договора или приложения. "
             "Конверт/адресный оборот в main_pages — технический носитель, не юридический род; "
-            "определи род по содержательному вложению (evidence.role=main/continuation). "
+            "определи род по содержательному вложению. "
             "Номер и дата документа относятся к основной части group.main_pages; "
             "номера/даты связанных документов сохраняются в related_entities/attachments. "
             "При расхождении OCR с изображением проверяй оригинальное изображение. "
@@ -510,6 +432,28 @@ class Analyze:
                     emit,
                     schema=schema,
                 )
+            if not group.attachments and facts.requisites.attachments:
+                attachments = []
+                for attachment in facts.requisites.attachments:
+                    span = attachment.page_range
+                    if span:
+                        attachments.append(
+                            AttachmentPages(
+                                kind=attachment.title or "Приложение",
+                                pages=[
+                                    p
+                                    for p in group.pages
+                                    if p.file_id == group.pages[0].file_id
+                                    and span[0] <= p.page_number <= span[1]
+                                ],
+                                relation="Приложение, распознанное VLM внутри утверждённой группы",
+                            )
+                        )
+                nested = {p for a in attachments for p in a.pages}
+                main = [p for p in group.pages if p not in nested]
+                if attachments and main:
+                    group.main_pages, group.attachments = main, attachments
+                    return await self._extract(job, group, pages, emit)
             if date_reading is not None:
                 facts.warnings = list(dict.fromkeys([*facts.warnings, *date_reading.warnings]))
             if facts.requisites.related_entities.court_cases:
@@ -605,7 +549,8 @@ class Analyze:
             await self.repository.finish(
                 job.id, job.fence, None, {}, {"code": exc.code, "message": exc.message}, False
             )
-        except Exception:
+        except Exception as exc:
+            report_failure(exc)
             await self.repository.finish(
                 job.id,
                 job.fence,
@@ -633,48 +578,22 @@ class Analyze:
             recognized = None
             if not job.skip_segmentation and job.approved_plan is None:
                 if job.proposed_plan is None:
+                    await emit("stage", {"stage": "docling", "progress": 15})
+                    recognized = await self.ocr.recognize(pages, emit)
                     await emit("stage", {"stage": "segmentation_vlm", "progress": 35})
-                    try:
-                        async with asyncio.timeout(self.settings.vlm_segmentation_timeout_seconds):
-                            # Границы определяются изображениями VLM. OCR нужен для реквизитов
-                            # после фиксации состава; review не расходует OCR на всю пачку.
-                            plan = await self._plan(job, pages, emit)
-                        if job.auto_split:
-                            validate_plan(plan, job.page_refs())
-                    except TimeoutError:
-                        await self.repository.fallback_pages(
-                            job.id, job.fence, "segmentation_timeout"
-                        )
-                        return
-                    except IntakeError as exc:
-                        if exc.code not in {
-                            "invalid_segmentation",
-                            "schema_validation_failed",
-                            "model_invalid_json",
-                            "model_output_limit",
-                        }:
-                            raise
-                        await self.repository.fallback_pages(job.id, job.fence, exc.code)
-                        return
+                    plan = await self.pairwise.run(job, recognized, emit)
                     job = await self.repository.propose(job.id, job.fence, plan)
-                elif not job.auto_split:
+                else:
                     job = await self.repository.propose(job.id, job.fence, job.proposed_plan)
                 if job.status == "awaiting_confirmation":
                     return
             job = await self.repository.lock_plan(job.id, job.fence)
             manifest = {**job.manifest, "documents": {}}
-            if job.segmentation_source in {"vlm_auto", "vlm_confirmed"}:
-                groups = list(job.proposed_plan.documents)
-            else:
-                groups = [
-                    FixedGroup(document_index=i, pages=list(d.pages))
-                    for i, d in enumerate(job.approved_plan.documents, 1)
-                ]
-                manifest["plan"] = {
-                    "documents": [g.model_dump(mode="json") for g in groups],
-                    "unassigned_pages": [],
-                    "warnings": [],
-                }
+            groups = [
+                FixedGroup(document_index=i, pages=list(d.pages))
+                for i, d in enumerate(job.approved_plan.documents, 1)
+            ]
+            manifest["plan"] = job.approved_plan.model_dump(mode="json")
             manifest["excluded_pages"] = [
                 p.model_dump(mode="json") for p in job.approved_plan.excluded_pages
             ]
@@ -707,13 +626,11 @@ class Analyze:
                 )
                 for s in job.sources
             }
-            plan_warnings = job.proposed_plan.warnings if job.proposed_plan else []
-            if job.manifest.get("segmentation_fallback"):
-                plan_warnings = [
-                    *plan_warnings,
-                    "Авторазделение не подтверждено; использована проверенная пользователем "
-                    "постраничная разметка",
-                ]
+            plan_warnings = (
+                ["Проблемные переходы OCR явно подтверждены пользователем"]
+                if any(p.status != "completed" for p in job.comparisons)
+                else []
+            )
             has_warnings = bool(plan_warnings or manifest["excluded_pages"]) or any(
                 p.get("ocr_truncated") for p in recognized
             )
@@ -728,6 +645,11 @@ class Analyze:
                 )
                 selected = [lookup[(p.file_id, p.page_number)] for p in group.pages]
                 facts = await self._extract(job, group, selected, emit)
+                if not group.main_pages:
+                    group.main_pages = list(group.pages)
+                manifest["documents"][artifacts[index - 1][0]]["group"] = group.model_dump(
+                    mode="json"
+                )
                 facts.one_c = project_one_c(facts, job.organization_hint)
                 facts.recognition.ocr_engine = "docling"
                 facts.warnings.extend(plan_warnings)
@@ -777,6 +699,11 @@ class Analyze:
             result = BatchResult(batch_id=job.id, files=list(files.values())).model_dump(
                 mode="json"
             )
+            manifest["plan"] = {
+                "documents": [group.model_dump(mode="json") for group in groups],
+                "unassigned_pages": [],
+                "warnings": plan_warnings,
+            }
             # URLs привязываются к окончательному TTL при выдаче через API, а не придумываются VLM.
             await self.repository.finish(job.id, job.fence, result, manifest, None, has_warnings)
         except LeaseLost:
@@ -785,7 +712,8 @@ class Analyze:
             await self.repository.finish(
                 job.id, job.fence, None, manifest, {"code": exc.code, "message": exc.message}, False
             )
-        except Exception:
+        except Exception as exc:
+            report_failure(exc)
             await self.repository.finish(
                 job.id,
                 job.fence,

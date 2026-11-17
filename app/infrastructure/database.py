@@ -1,12 +1,16 @@
 # app/infrastructure/database.py
 """PostgreSQL: атомарные переходы, outbox, lease/fencing и монотонный SSE-журнал."""
 
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import timedelta
 
 from sqlalchemy import JSON, DateTime, Integer, String, UniqueConstraint, delete, func, select, text
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from app.domain.comparisons import ALGORITHM_VERSION, Comparison
 from app.domain.errors import IntakeError, LeaseLost
 from app.domain.jobs import TERMINAL, Job, utcnow
 from app.infrastructure.boundary_transactions import BoundaryTransactions
@@ -74,6 +78,19 @@ class Database(BoundaryTransactions):
         self.engine = engine
         self.sessions = async_sessionmaker(engine, expire_on_commit=False)
         self.settings = settings
+        self._sqlite_writer = asyncio.Lock()
+
+    @asynccontextmanager
+    async def _transaction(self) -> AsyncIterator[AsyncSession]:
+        """SQLite получает справедливую очередь записей; PostgreSQL использует row locks."""
+        if self.engine.dialect.name == "sqlite":
+            # BEGIN IMMEDIATE гарантирует изоляцию, но конкурентные retry его драйвера
+            # могут отодвигать ожидающего writer при непрерывном потоке checkpoint.
+            async with self._sqlite_writer, self.sessions.begin() as session:
+                yield session
+        else:
+            async with self.sessions.begin() as session:
+                yield session
 
     async def _serialize_admission(self, session) -> None:
         """Сериализует admission/idempotency между API-процессами PostgreSQL."""
@@ -167,7 +184,7 @@ class Database(BoundaryTransactions):
 
     async def create(self, job: Job, key: str | None, digest: str) -> tuple[Job, bool]:
         """Атомарно связывает owner/key/hash и создаёт запись outbox при запуске."""
-        async with self.sessions.begin() as session:
+        async with self._transaction() as session:
             await self._serialize_admission(session)
             if key:
                 row = await session.scalar(
@@ -211,10 +228,14 @@ class Database(BoundaryTransactions):
 
     async def start(self, job_id: str, owner: str, prompts: dict[str, str]) -> Job:
         """Один раз фиксирует промпты и ставит upload в очередь транзакционно."""
-        async with self.sessions.begin() as session:
+        async with self._transaction() as session:
             await self._serialize_admission(session)
             row, job = await self._locked(session, job_id)
             job.authorize(owner)
+            if job.algorithm_version != ALGORITHM_VERSION and job.status not in TERMINAL:
+                raise IntakeError(
+                    "algorithm_version_changed", "Загрузите пакет повторно после обновления", 409
+                )
             if (
                 job.segmentation_source in {"manual", "manual_override"}
                 and job.approved_plan is None
@@ -243,9 +264,13 @@ class Database(BoundaryTransactions):
 
     async def cancel(self, job_id: str, owner: str) -> Job:
         """Отзывает fencing и завершает отмену без ожидания пользовательского решения."""
-        async with self.sessions.begin() as session:
+        async with self._transaction() as session:
             row, job = await self._locked(session, job_id)
             job.authorize(owner)
+            if job.algorithm_version != ALGORITHM_VERSION and job.status not in TERMINAL:
+                raise IntakeError(
+                    "algorithm_version_changed", "Загрузите пакет повторно после обновления", 409
+                )
             if job.status not in TERMINAL:
                 job.fence += 1
                 self._terminal(session, row, job, "cancelled", None)
@@ -254,10 +279,12 @@ class Database(BoundaryTransactions):
 
     async def claim(self, job_id: str) -> Job | None:
         """Выдаёт новый lease только queued; дубликаты доставки не запускают второй worker."""
-        async with self.sessions.begin() as session:
+        async with self._transaction() as session:
             try:
                 row, job = await self._locked(session, job_id)
             except IntakeError:
+                return None
+            if job.algorithm_version != ALGORITHM_VERSION:
                 return None
             if job.status != "queued" and not (
                 job.status == "uploaded" and job.work_kind == "prepare" and not job.preview_complete
@@ -294,9 +321,21 @@ class Database(BoundaryTransactions):
             await session.execute(delete(SignalRow).where(SignalRow.job_id == job_id))
             return job
 
+    async def is_active(self, job_id: str, fence: int) -> bool:
+        """Читает только статус и fence; не блокирует строку и не продлевает lease."""
+        async with self.sessions() as session:
+            row = (
+                await session.execute(
+                    select(JobRow.status, JobRow.data["fence"].as_integer()).where(
+                        JobRow.id == job_id
+                    )
+                )
+            ).first()
+            return bool(row and row[1] == fence and row[0] in {"running", "uploaded"})
+
     async def heartbeat(self, job_id: str, fence: int) -> bool:
         """Продлевает lease только живого поколения в пределах общего deadline."""
-        async with self.sessions.begin() as session:
+        async with self._transaction() as session:
             row, job = await self._locked(session, job_id)
             try:
                 self._assert_worker(row, job, fence)
@@ -307,10 +346,15 @@ class Database(BoundaryTransactions):
 
     async def checkpoint(self, job_id: str, fence: int, kind: str, data: dict) -> None:
         """Сохраняет этап/рендеры/событие; устаревшему worker запись запрещена."""
-        async with self.sessions.begin() as session:
+        async with self._transaction() as session:
             row, job = await self._locked(session, job_id)
             self._assert_worker(row, job, fence)
-            if kind == "stage":
+            if kind in {"pair_started", "pair_result"}:
+                pair = Comparison.model_validate(data)
+                indexed = {p.index: p for p in job.comparisons}
+                indexed[pair.index] = pair
+                job.comparisons = [indexed[i] for i in sorted(indexed)]
+            elif kind == "stage":
                 job.stage, job.progress = data["stage"], data["progress"]
             elif kind == "normalized":
                 job.manifest = data
@@ -348,7 +392,7 @@ class Database(BoundaryTransactions):
         warnings: bool,
     ) -> None:
         """Одной транзакцией публикует проверенный результат и терминальное событие."""
-        async with self.sessions.begin() as session:
+        async with self._transaction() as session:
             row, job = await self._locked(session, job_id)
             self._assert_worker(row, job, fence)
             job.result = result
@@ -368,7 +412,7 @@ class Database(BoundaryTransactions):
 
     async def ensure_session(self, owner: str) -> None:
         """Регистрирует анонимную сессию в PostgreSQL без хранения cookie в открытом виде."""
-        async with self.sessions.begin() as session:
+        async with self._transaction() as session:
             await self._serialize_admission(session)
             if not await session.get(SessionRow, owner):
                 session.add(
@@ -415,7 +459,7 @@ class Database(BoundaryTransactions):
 
     async def published(self, job_id: str) -> None:
         """Оставляет durable сигнал до claim; подтверждённая публикация отложена на 30 секунд."""
-        async with self.sessions.begin() as session:
+        async with self._transaction() as session:
             row = await session.get(SignalRow, job_id, with_for_update=True)
             if row:
                 row.next_at = utcnow() + timedelta(seconds=30)
@@ -423,7 +467,7 @@ class Database(BoundaryTransactions):
     async def recover(self) -> list[str]:
         """Восстанавливает зависшие lease, ограничивает retry и возвращает истёкшие job ids."""
         expired = []
-        async with self.sessions.begin() as session:
+        async with self._transaction() as session:
             if self.engine.dialect.name == "sqlite":
                 await self._serialize_admission(session)
             rows = await session.scalars(
@@ -481,7 +525,7 @@ class Database(BoundaryTransactions):
 
     async def purge(self, job_id: str) -> None:
         """Удаляет DB payload только после подтверждённого TTL и физической очистки."""
-        async with self.sessions.begin() as session:
+        async with self._transaction() as session:
             row, job = await self._locked(session, job_id)
             if (
                 not job.expires_at
@@ -511,7 +555,7 @@ class Database(BoundaryTransactions):
 
     async def save_prompts(self, owner: str, prompts: dict[str, str]) -> None:
         """Сохраняет оба текста с ограниченным сроком жизни сессии."""
-        async with self.sessions.begin() as session:
+        async with self._transaction() as session:
             await self._serialize_admission(session)
             row = await session.get(SessionRow, owner, with_for_update=True)
             if not row:
@@ -522,7 +566,7 @@ class Database(BoundaryTransactions):
 
     async def throttle(self, owner: str, *, limit: int | None = None) -> None:
         """Считает межпроцессный transport-бюджет отдельно от управляющих команд."""
-        async with self.sessions.begin() as session:
+        async with self._transaction() as session:
             await self._serialize_admission(session)
             row = await session.get(LimitRow, owner, with_for_update=True)
             window = int(utcnow().timestamp()) // 60

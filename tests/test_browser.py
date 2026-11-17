@@ -244,11 +244,12 @@ async def test_browser_manual_first_keyboard_exclusion_and_review(container, unu
             await expect(page.locator("[data-page-counts]")).to_contain_text("исключено 1")
             await page.locator("[data-confirm-plan]").click()
             await expect(page.locator("[data-export]")).to_be_enabled(timeout=30000)
-            assert all(call["schema"]["title"] != "Plan" for call in container.vision.calls)
+            assert all(call["schema"]["title"] != "PairAnswer" for call in container.vision.calls)
             assert (await container.database.get(job_id)).plan_locked
             await page.screenshot(path="tmp/browser-boundary-manual.png", full_page=True)
-            async with page.expect_navigation(wait_until="load"):
-                await page.locator("[data-new-analysis]").click()
+            page.once("dialog", lambda dialog: dialog.accept())
+            await page.locator("[data-new-analysis]").click()
+            await expect(page.locator("[data-files]")).to_be_enabled()
             await page.locator("[data-auto-split]").uncheck()
             await page.locator("[data-files]").set_input_files(
                 {"name": "review.pdf", "mimeType": "application/pdf", "buffer": pdf_bytes(3)}
@@ -261,12 +262,13 @@ async def test_browser_manual_first_keyboard_exclusion_and_review(container, unu
             await page.screenshot(path="tmp/browser-boundary-review.png", full_page=True)
             await page.locator("[data-confirm-plan]").click()
             await expect(page.locator("[data-export]")).to_be_enabled(timeout=30000)
-            async with page.expect_navigation(wait_until="load"):
-                await page.locator("[data-new-analysis]").click()
+            page.once("dialog", lambda dialog: dialog.accept())
+            await page.locator("[data-new-analysis]").click()
+            await expect(page.locator("[data-files]")).to_be_enabled()
             await page.locator("[data-skip-segmentation]").check()
             await expect(page.locator("[data-auto-split]")).to_be_disabled()
             segmentation_calls = len(
-                [call for call in container.vision.calls if call["schema"]["title"] == "Plan"]
+                [call for call in container.vision.calls if call["schema"]["title"] == "PairAnswer"]
             )
             await page.locator("[data-files]").set_input_files(
                 {"name": "skip.pdf", "mimeType": "application/pdf", "buffer": pdf_bytes(2)}
@@ -276,11 +278,18 @@ async def test_browser_manual_first_keyboard_exclusion_and_review(container, unu
             await page.locator("[data-start]").click()
             await expect(page.locator("[data-export]")).to_be_enabled(timeout=30000)
             assert (
-                len([call for call in container.vision.calls if call["schema"]["title"] == "Plan"])
+                len(
+                    [
+                        call
+                        for call in container.vision.calls
+                        if call["schema"]["title"] == "PairAnswer"
+                    ]
+                )
                 == segmentation_calls
             )
-            async with page.expect_navigation(wait_until="load"):
-                await page.locator("[data-new-analysis]").click()
+            page.once("dialog", lambda dialog: dialog.accept())
+            await page.locator("[data-new-analysis]").click()
+            await expect(page.locator("[data-files]")).to_be_enabled()
             await page.locator("[data-files]").set_input_files(
                 {"name": "thousand.pdf", "mimeType": "application/pdf", "buffer": pdf_bytes(1000)}
             )

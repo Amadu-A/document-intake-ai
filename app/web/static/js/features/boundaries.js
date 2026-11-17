@@ -8,7 +8,7 @@ export function createBoundaryEditor(viewer, changed) {
   /** Хранит метаданные; изображения и URL запрашивает порциями по 60 страниц. */
   let snapshot = null, saved = null, savedStatus = null, plan = null, physical = [], filtered = [], selected = new Set(), anchor = 0;
   let busy = false, history = [], generation = 0, editing = null, lastJob = null;
-  let activePageKey = null;
+  let activePageKey = null, controller = new AbortController(), dragCleanup = () => {};
   const cache = new Map(), requests = new Map();
   const finalRoles = new Map();
   const scroll = document.querySelector("[data-boundary-scroll]"), track = document.querySelector("[data-boundary-track]");
@@ -26,7 +26,7 @@ export function createBoundaryEditor(viewer, changed) {
     const position = physical.findIndex(p => pageKey(p) === key), offset = Math.floor(position / 60) * 60;
     if (position < 0) return null;
     const requestKey = `${generation}:${offset}`, ownGeneration = generation;
-    if (!requests.has(requestKey)) requests.set(requestKey, api(`${endpoint()}/pages?offset=${offset}&limit=60`).then(data => {
+    if (!requests.has(requestKey)) requests.set(requestKey, api(`${endpoint()}/pages?offset=${offset}&limit=60`, { signal: controller.signal }).then(data => {
       if (ownGeneration === generation) for (const page of data.pages) cache.set(pageKey(page), { page, time: Date.now() });
     }).finally(() => requests.delete(requestKey)));
     await requests.get(requestKey); return cache.get(key)?.page;
@@ -35,8 +35,6 @@ export function createBoundaryEditor(viewer, changed) {
     /** Различает ручной диапазон, предложение VLM и исключённую страницу. */
     const group = groupFor(plan, ref), index = plan?.documents.indexOf(group);
     if (finalRoles.has(pageKey(ref))) return finalRoles.get(pageKey(ref));
-    const proposed = saved?.segmentation_source?.startsWith("vlm") ? saved.proposed_plan?.documents : [];
-    for (const doc of proposed || []) for (const attachment of doc.attachments) if (attachment.pages.some(p => pageKey(p) === pageKey(ref))) return `Приложение: ${attachment.kind} · документ ${doc.document_index}`;
     return group ? `Документ ${index + 1} · ${sourceLabel(saved?.segmentation_source)}` : "Вне диапазона · оригинал сохранён";
   }
   function selection(ref, extend = false, toggle = false) {
@@ -90,6 +88,13 @@ export function createBoundaryEditor(viewer, changed) {
         if (pageKey(group.pages[0]) === pageKey(ref)) handle(card, group, "left", global);
         if (pageKey(group.pages.at(-1)) === pageKey(ref)) handle(card, group, "right", global);
       }
+      const uncertain = snapshot?.comparisons?.transitions?.find(p => p.status === "unresolved" && pageKey(p.right_page) === pageKey(ref));
+      if (uncertain) {
+        card.classList.add("boundary__page--uncertain");
+        const mark = document.createElement("span"); mark.className = "boundary__uncertain";
+        mark.textContent = `? Переход ${uncertain.left_page.page_number}–${uncertain.right_page.page_number}`;
+        mark.title = "Граница не определена: " + uncertain.error_code; card.append(mark);
+      }
       fragment.append(card);
     }
     const tail = Math.max(0, filtered.length - first - count); if (tail) spacer(tail * 108 - 8);
@@ -118,6 +123,7 @@ export function createBoundaryEditor(viewer, changed) {
       if (busy || e.button !== 0) return;
       e.preventDefault(); original(); const origin = e.clientX, startScroll = scroll.scrollLeft;
       const drag = event => {
+        if (!editing) return;
         if (event.clientX > scroll.getBoundingClientRect().right - 30) scroll.scrollLeft += 35;
         if (event.clientX < scroll.getBoundingClientRect().left + 30) scroll.scrollLeft -= 35;
         const delta = Math.round((event.clientX - origin + scroll.scrollLeft - startScroll) / 108);
@@ -126,6 +132,7 @@ export function createBoundaryEditor(viewer, changed) {
         if (target) move(physical.findIndex(p => pageKey(p) === pageKey(target)));
       };
       const cleanup = () => { window.removeEventListener("pointermove", drag); window.removeEventListener("pointerup", done); window.removeEventListener("pointercancel", cancel); };
+      dragCleanup = cleanup;
       const done = () => { cleanup(); if (editing) save(plan, "boundary_move"); };
       const cancel = () => { cleanup(); if (editing) { plan = editing.plan; editing = null; render(); savedMessage(); } };
       window.addEventListener("pointermove", drag); window.addEventListener("pointerup", done, { once: true }); window.addEventListener("pointercancel", cancel, { once: true });
@@ -135,10 +142,11 @@ export function createBoundaryEditor(viewer, changed) {
   async function mutate(path, method, body) {
     /** При конфликте перечитывает актуальную редакцию без автоматической перезаписи. */
     if (busy) return null;
+    const own = generation;
     busy = true; controls(); saveLabel.textContent = "Сохраняем на сервере…"; saveLabel.classList.add("boundary__save--pending");
-    try { const response = await api(endpoint() + path, { method, body: JSON.stringify({ expected_revision: saved.plan_revision, ...body }) }); errorLabel.hidden = true; return response; }
-    catch (error) { errorLabel.textContent = error.status === 409 ? "План изменён или уже заблокирован. Загружена актуальная версия; проверьте состав перед повтором." : error.message; errorLabel.hidden = false; notice(errorLabel.textContent, true); return null; }
-    finally { busy = false; editing = null; saved = null; await changed(); savedMessage(); controls(); }
+    try { const response = await api(endpoint() + path, { method, signal: controller.signal, body: JSON.stringify({ expected_revision: saved.plan_revision, ...body }) }); if (own !== generation) return null; errorLabel.hidden = true; return response; }
+    catch (error) { if (own !== generation || error.name === "AbortError") return null; errorLabel.textContent = error.status === 409 ? "План изменён или уже заблокирован. Загружена актуальная версия; проверьте состав перед повтором." : error.message; errorLabel.hidden = false; notice(errorLabel.textContent, true); return null; }
+    finally { if (own === generation) { editing = null; saved = null; await changed(); if (own === generation) { busy = false; savedMessage(); render(); } } }
   }
   async function save(next, action) {
     /** Первая ручная правка одним PUT переключает режим и сохраняет весь состав. */
@@ -178,6 +186,20 @@ export function createBoundaryEditor(viewer, changed) {
   });
   scroll.addEventListener("scroll", render, { passive: true }); window.addEventListener("resize", render);
   return {
+    reset() {
+      /** Отзывает запросы/жесты и удаляет все данные прежнего пакета. */
+      generation++; controller.abort(); controller = new AbortController(); dragCleanup();
+      snapshot = saved = savedStatus = plan = editing = lastJob = activePageKey = null;
+      physical = []; filtered = []; history = []; selected.clear(); cache.clear(); requests.clear(); finalRoles.clear(); busy = false; anchor = 0;
+      clearPreviews(); track.replaceChildren(); scroll.scrollLeft = 0;
+      sourceSelect.replaceChildren(new Option("Все файлы", "")); auto.checked = true; skip.checked = false;
+      errorLabel.hidden = true; errorLabel.textContent = "";
+      document.querySelector("[data-boundary-selection]").textContent = "Выбрано страниц: 0";
+      document.querySelector("[data-page-counts]").textContent = "Превью 0/0";
+      document.querySelector("[data-boundary-status]").textContent = "Загрузите файлы";
+      const jump = document.querySelector("[data-page-jump]"); jump.value = "1"; jump.max = 1;
+      savedMessage(); controls();
+    },
     flags, pending: () => busy || !!editing,
     expire() { /** Закрывает локальные действия и RAM-кеш сразу по TTL. */ if (snapshot) snapshot.status = "expired"; clearPreviews(); controls(); },
     result(value) {
@@ -190,11 +212,14 @@ export function createBoundaryEditor(viewer, changed) {
     },
     async update(data) {
       /** Snapshot без тысячи URL; состав запрашивается при смене редакции/состояния. */
-      if (lastJob !== data.job_id) { generation++; lastJob = data.job_id; clearPreviews(); cache.clear(); finalRoles.clear(); history = []; saved = null; selected.clear(); scroll.scrollLeft = 0; errorLabel.hidden = true; }
+      if (lastJob !== data.job_id) { generation++; controller.abort(); controller = new AbortController(); lastJob = data.job_id; clearPreviews(); cache.clear(); finalRoles.clear(); history = []; saved = null; selected.clear(); scroll.scrollLeft = 0; errorLabel.hidden = true; }
+      const own = generation;
       snapshot = data;
       physical = data.sources.flatMap(source => Array.from({ length: source.page_count || 0 }, (_, i) => ({ file_id: source.file_id, page_number: i + 1 })));
       if (!saved || saved.plan_revision !== data.plan_revision || saved.locked !== data.plan_locked || saved.preview_complete !== data.preview_complete || savedStatus !== data.status) {
-        saved = await api(`${endpoint()}/segmentation`); savedStatus = data.status; plan = saved.draft_plan || { documents: [], excluded_pages: [] }; editing = null;
+        const response = await api(`${endpoint()}/segmentation`, { signal: controller.signal });
+        if (own !== generation) return null;
+        saved = response; savedStatus = data.status; plan = saved.draft_plan || { documents: [], excluded_pages: [] }; editing = null;
       }
       auto.checked = saved.auto_split; skip.checked = saved.skip_segmentation;
       const previousSource = sourceSelect.value; sourceSelect.replaceChildren(new Option("Все файлы", ""));
@@ -202,6 +227,10 @@ export function createBoundaryEditor(viewer, changed) {
       document.querySelector("[data-page-counts]").textContent = `Превью ${data.pages_ready}/${data.pages_total} · в диапазонах ${saved.assigned_count} · исключено ${saved.excluded_count} · свободно ${saved.unassigned_count}`;
       document.querySelector("[data-page-jump]").max = physical.length || 1;
       document.querySelector("[data-boundary-status]").textContent = data.preview_complete ? `${saved.document_count} диапазонов · ${data.pages_total} страниц · ${sourceLabel(saved.segmentation_source)}` : `Подготовка превью: ${data.pages_ready}/${data.pages_total || "…"}. Готовые страницы уже доступны для разметки.`;
+      if (data.comparisons?.total) {
+        const p = data.comparisons;
+        document.querySelector("[data-boundary-status]").textContent += ` · сравнения ${p.completed}/${p.total} · ошибок ${p.errors}`;
+      }
       if (!editing && !busy) savedMessage(); render(); viewer.update(data, physical); return { ...data, segmentation: saved };
     },
   };

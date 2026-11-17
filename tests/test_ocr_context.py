@@ -85,5 +85,6 @@ async def test_context_limit_counts_useful_content_and_preserves_full_ocr(
     assert result["ocr_truncated"] is (text_size > 20000)
     assert any(kind == "warning" for kind, _ in events) is (text_size > 20000)
     assert "metadata" not in result["ocr"]
+    assert json.loads(result["ocr_full"])[0]["text"] == item["text"]
     if text_size < 20000:
         assert json.loads(result["ocr"])[0]["text"] == item["text"]

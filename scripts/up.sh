@@ -119,6 +119,8 @@ unset broker_config broker_values broker_password
 stage 'Проверка реальных контрактов Docling OCR и VLM vision/JSON'
 "${dc[@]}" run --rm --no-deps -T api python -m app.operations contracts
 stage 'Собственная PostgreSQL и Alembic migrations'
+# Старый worker не должен записывать задания одновременно с миграцией алгоритма.
+"${dc[@]}" stop api worker
 "${dc[@]}" up -d --wait --wait-timeout 120 postgres
 "${dc[@]}" run --rm --no-deps -T migrate
 stage 'Запуск или обновление собственных API/worker'

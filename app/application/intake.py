@@ -9,6 +9,7 @@ from app.application.ports import JobRepository, Storage, Upload
 from app.application.prompts import Prompts
 from app.core.observability import timed
 from app.domain.boundaries import validate_mode
+from app.domain.comparisons import ALGORITHM_VERSION
 from app.domain.errors import IntakeError
 from app.domain.jobs import Job, utcnow
 
@@ -48,9 +49,10 @@ class Intake:
                 "sources": [(s.file_name, s.mime_type, s.sha256) for s in sources],
                 "organization": organization,
                 "start": start,
+                "algorithm_version": ALGORITHM_VERSION,
                 "prompts": prompts if start else {},
             }
-            # Default-запрос сохраняет прежний hash: retry старой 1С после обновления допустим.
+            # Старое задание не должно воспроизводиться под новым алгоритмом.
             if not auto_split or skip_segmentation:
                 identity["mode"] = {
                     "auto_split": auto_split,

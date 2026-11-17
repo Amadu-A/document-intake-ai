@@ -6,8 +6,18 @@ Set-Location (Join-Path $PSScriptRoot '..')
 function Invoke-Checked {
     # Немедленно завершает проверку при ошибке внешнего инструмента.
     param([string]$Command, [string[]]$Arguments)
-    & $Command @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "Проверка завершилась с кодом $LASTEXITCODE : $Command" }
+    Get-Command $Command -ErrorAction Stop | Out-Null
+    $previousPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell при 2>&1 превращает обычный stderr uv в ErrorRecord.
+        # Итог внешней команды определяет её exit code, вывод остаётся видимым.
+        $ErrorActionPreference = 'Continue'
+        & $Command @Arguments
+        $commandExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    if ($commandExitCode -ne 0) { throw "Проверка завершилась с кодом $commandExitCode : $Command" }
 }
 Invoke-Checked 'uv' @('sync', '--frozen')
 if ($Browser) { Invoke-Checked 'uv' @('run', '--frozen', 'playwright', 'install', '--no-shell', 'chromium') }

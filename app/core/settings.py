@@ -70,6 +70,8 @@ class Settings(BaseSettings):
     vlm_window_pages: int = Field(8, ge=2, le=32)
     vlm_overlap_pages: int = Field(2, ge=1)
     vlm_reconciliation_windows: int = Field(4, ge=2, le=8)
+    pair_concurrency: int = Field(4, ge=1, le=16)
+    pair_max_attempts: int = Field(3, ge=1, le=5)
     vlm_segmentation_timeout_seconds: int = Field(900, ge=10, le=3600)
     vlm_max_tokens: int = Field(16000, ge=1024, le=32768)
     model_attempts: int = Field(3, ge=1, le=5)

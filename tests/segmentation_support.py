@@ -51,6 +51,21 @@ def compare_groups(expected: list[list[int]], actual: list[list[int]]) -> dict:
     }
 
 
+def sequential_expected(pdf: Path, count: int) -> list[list[int]]:
+    """Читает отдельный подтверждённый эталон; исторические несмежные группы не преобразует."""
+    candidates = [
+        pdf.with_name(pdf.stem + ".adjacent.expected.json"),
+        pdf.with_name(pdf.stem + "_cut.json"),
+    ]
+    path = next((p for p in candidates if p.exists()), None)
+    if path is None:
+        raise ValueError("Нужен подтверждённый последовательный эталон, независимый от модели")
+    groups = expected_groups(path, count)
+    if any(group != list(range(group[0], group[-1] + 1)) for group in groups):
+        raise ValueError("Несмежный исторический эталон несовместим с новым авторазделением")
+    return groups
+
+
 async def run_segmentation_case(
     client: httpx.AsyncClient, pdf: Path, *, headers: dict, timeout_seconds: int
 ) -> dict:
@@ -59,8 +74,7 @@ async def run_segmentation_case(
 
     with pymupdf.open(pdf) as document:
         count = len(document)
-    cut = pdf.with_name(pdf.stem + "_cut.json")
-    expected = expected_groups(cut if cut.exists() else pdf.with_suffix(".json"), count)
+    expected = sequential_expected(pdf, count)
     began = monotonic()
     with pdf.open("rb") as stream:
         response = await client.post(
@@ -90,7 +104,8 @@ async def run_segmentation_case(
                 "pages": count,
                 "status": snapshot["status"],
                 "segmentation_source": segmentation["segmentation_source"],
-                "fallback_code": (segmentation.get("fallback") or {}).get("code"),
+                "comparisons": snapshot.get("comparisons", {}),
+                "technical_complete": snapshot.get("comparisons", {}).get("completed") == count - 1,
                 "error_code": (snapshot.get("error") or {}).get("code"),
                 "seconds": round(monotonic() - began, 2),
                 "expected": expected,

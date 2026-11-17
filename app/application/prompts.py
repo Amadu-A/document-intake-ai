@@ -14,7 +14,7 @@ class Prompts:
     def __init__(self, repository: PromptRepository, directory: Path) -> None:
         """Подключает repository и каталог утверждённых промптов при сборке приложения."""
         self.repository = repository
-        self.versions = {"segmentation": "v3", "extraction": "v4"}
+        self.versions = {"segmentation": "v4", "extraction": "v4"}
         self.base = {
             stage: (directory / f"{stage}-{self.versions[stage]}.txt").read_text("utf-8")
             for stage in ("segmentation", "extraction")
@@ -23,8 +23,11 @@ class Prompts:
     async def get(self, owner: str) -> dict:
         """Возвращает оба текста и стабильные хеши базовых версий."""
         saved = await self.repository.get_prompts(owner)
+        values = {key: (saved or {}).get(key, text) for key, text in self.base.items()}
+        if not saved or saved.get("_segmentation_version") != self.versions["segmentation"]:
+            values["segmentation"] = self.base["segmentation"]
         return {
-            "prompts": saved or dict(self.base),
+            "prompts": values,
             "base_prompts": dict(self.base),
             "versions": {
                 k: self.versions[k] + ":" + hashlib.sha256(v.encode()).hexdigest()[:12]
@@ -38,7 +41,9 @@ class Prompts:
             not 20 <= len(v) <= 30000 for v in prompts.values()
         ):
             raise IntakeError("invalid_prompts", "Нужны два промпта длиной от 20 до 30000 символов")
-        await self.repository.save_prompts(owner, dict(prompts))
+        await self.repository.save_prompts(
+            owner, {**prompts, "_segmentation_version": self.versions["segmentation"]}
+        )
         return await self.get(owner)
 
     async def restore(self, owner: str, stage: str) -> dict:

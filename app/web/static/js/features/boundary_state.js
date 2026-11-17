@@ -1,7 +1,7 @@
 // app/web/static/js/features/boundary_state.js
 /** Чистые операции редактора над физическими PageRef; сервер повторно валидирует каждую запись. */
 export const pageKey = ref => `${ref.file_id}:${ref.page_number}`;
-export const sourceLabel = source => ({ source_files: "Файлы задали границы", vlm_auto: "VLM разделила", vlm_proposed: "VLM предложила", vlm_confirmed: "Предложение VLM подтверждено", manual: "Размечено пользователем", manual_override: "Скорректировано вручную", page_fallback: "Постраничный черновик · требуется проверка" })[source] || "Исходная разметка";
+export const sourceLabel = source => ({ source_files: "Файлы задали границы", vlm_auto: "VLM разделила", vlm_proposed: "VLM предложила", vlm_confirmed: "Предложение VLM подтверждено", manual: "Размечено пользователем", manual_override: "Скорректировано вручную", vlm_partial: "Есть неопределённые переходы · требуется проверка" })[source] || "Исходная разметка";
 
 export function newGroupId() {
   /** Создаёт несекретный клиентский ID, доступный также на LAN HTTP без crypto.randomUUID. */

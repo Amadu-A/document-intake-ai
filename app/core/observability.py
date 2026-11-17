@@ -10,6 +10,22 @@ from pathlib import Path
 from time import perf_counter
 
 
+def report_failure(exc: Exception) -> None:
+    """Записывает только класс и координаты ошибки, без сообщения, SQL, OCR или secrets."""
+    logging.getLogger("intake").error(
+        json.dumps(
+            {
+                "event": "processing_failure",
+                "type": type(exc).__name__,
+                "frames": [
+                    f"{Path(frame.filename).name}:{frame.lineno}:{frame.name}"
+                    for frame in traceback.extract_tb(exc.__traceback__)
+                ],
+            }
+        )
+    )
+
+
 def timed(operation: str):
     """Измеряет sync/async операцию monotonic-таймером без логирования аргументов."""
 

@@ -6,15 +6,12 @@ from datetime import timedelta
 from app.domain.boundaries import (
     ApprovedPlan,
     ManualPlan,
-    draft_from_vlm,
-    single_page_plan,
     source_file_plan,
     validate_assignment,
     validate_mode,
 )
 from app.domain.errors import IntakeError, LeaseLost
 from app.domain.jobs import TERMINAL, Job, utcnow
-from app.domain.segmentation import Plan
 
 
 class BoundaryTransactions:
@@ -31,7 +28,7 @@ class BoundaryTransactions:
     def _waiting(self, job: Job) -> None:
         """Начинает конечное ожидание готового плана; обычные правки не продлевают его TTL."""
         if job.expires_at is None:
-            job.expires_at = (job.preview_ready_at or utcnow()) + timedelta(
+            job.expires_at = utcnow() + timedelta(
                 seconds=self.settings.confirmation_timeout_seconds
             )
         job.deadline_at = None
@@ -40,7 +37,7 @@ class BoundaryTransactions:
 
     async def complete_preview(self, job_id: str, fence: int, manifest: dict) -> Job:
         """Фиксирует превью и исходные группы; освобождает prepare либо продолжает анализ."""
-        async with self.sessions.begin() as session:
+        async with self._transaction() as session:
             await self._serialize_admission(session)
             row, job = await self._locked(session, job_id)
             self._assert_worker(row, job, fence)
@@ -78,19 +75,23 @@ class BoundaryTransactions:
     ) -> Job:
         """Меняет режим под row lock, не включая скрытый повторный запуск анализа."""
         validate_mode(auto_split, skip_segmentation)
-        async with self.sessions.begin() as session:
+        async with self._transaction() as session:
             row, job = await self._locked(session, job_id)
             self._editable(job, owner, revision)
             job.auto_split, job.skip_segmentation = auto_split, skip_segmentation
             job.processing_requested = False
             job.plan_revision += 1
             job.draft_plan = (
-                draft_from_vlm(job.proposed_plan)
+                job.proposed_plan.model_copy(deep=True)
                 if job.proposed_plan and not skip_segmentation
                 else source_file_plan(job.page_refs())
             )
             job.segmentation_source = (
-                ("vlm_auto" if auto_split else "vlm_proposed")
+                (
+                    "vlm_partial"
+                    if any(p.status != "completed" for p in job.comparisons)
+                    else ("vlm_auto" if auto_split else "vlm_proposed")
+                )
                 if job.proposed_plan and not skip_segmentation
                 else "source_files"
             )
@@ -122,7 +123,7 @@ class BoundaryTransactions:
         self, job_id: str, owner: str, revision: int, plan: ManualPlan, action: str
     ) -> Job:
         """Одной записью сохраняет ручные границы и переводит режим в skip, без вызова VLM."""
-        async with self.sessions.begin() as session:
+        async with self._transaction() as session:
             row, job = await self._locked(session, job_id)
             self._editable(job, owner, revision)
             validate_assignment(
@@ -160,25 +161,25 @@ class BoundaryTransactions:
             )
             return job
 
-    async def propose(self, job_id: str, fence: int, plan: Plan) -> Job:
+    async def propose(self, job_id: str, fence: int, plan: ManualPlan) -> Job:
         """Сохраняет предложение единожды; review освобождает lease до подтверждения."""
-        async with self.sessions.begin() as session:
+        async with self._transaction() as session:
             row, job = await self._locked(session, job_id)
             self._assert_worker(row, job, fence)
             if job.skip_segmentation or job.approved_plan:
                 raise LeaseLost()
             if job.proposed_plan is None:
                 job.proposed_plan = plan.model_copy(deep=True)
-            job.draft_plan = draft_from_vlm(job.proposed_plan)
+            job.draft_plan = job.proposed_plan.model_copy(deep=True)
             job.plan_revision += 1
             job.manifest = {**job.manifest, "plan": job.proposed_plan.model_dump(mode="json")}
-            job.segmentation_source = "vlm_auto" if job.auto_split else "vlm_proposed"
-            if not job.auto_split:
+            incomplete = any(pair.status != "completed" for pair in job.comparisons)
+            job.segmentation_source = (
+                "vlm_partial" if incomplete else ("vlm_auto" if job.auto_split else "vlm_proposed")
+            )
+            if not job.auto_split or incomplete:
                 job.status, job.stage = "awaiting_confirmation", "awaiting_confirmation"
                 row.lease_until = None
-                job.expires_at = (job.preview_ready_at or utcnow()) + timedelta(
-                    seconds=self.settings.confirmation_timeout_seconds
-                )
                 self._waiting(job)
                 await self._drop_signal(session, job.id)
             self._write(
@@ -188,7 +189,7 @@ class BoundaryTransactions:
 
     async def confirm(self, job_id: str, owner: str, revision: int, prompts: dict[str, str]) -> Job:
         """Утверждает одну ревизию один раз и атомарно создаёт единственный сигнал extraction."""
-        async with self.sessions.begin() as session:
+        async with self._transaction() as session:
             await self._serialize_admission(session)
             row, job = await self._locked(session, job_id)
             job.authorize(owner)
@@ -214,7 +215,7 @@ class BoundaryTransactions:
             job.approved_plan = ApprovedPlan.from_draft(job.draft_plan)
             job.approved_revision = revision
             job.plan_locked = True
-            if job.segmentation_source == "vlm_proposed":
+            if job.segmentation_source in {"vlm_proposed", "vlm_partial"}:
                 job.segmentation_source = "vlm_confirmed"
             job.fence += 1
             row.lease_until = None
@@ -236,38 +237,18 @@ class BoundaryTransactions:
             )
             return job
 
-    async def fallback_pages(self, job_id: str, fence: int, reason: str) -> Job:
-        """Освобождает worker и предлагает все страницы для проверки, без результата/extraction."""
-        async with self.sessions.begin() as session:
-            row, job = await self._locked(session, job_id)
-            self._assert_worker(row, job, fence)
-            if job.skip_segmentation or job.approved_plan is not None:
-                raise LeaseLost()
-            job.auto_split, job.skip_segmentation = False, True
-            job.segmentation_source = "page_fallback"
-            job.draft_plan = single_page_plan(job.page_refs())
-            job.plan_revision += 1
-            job.processing_requested = False
-            job.status, job.stage = "awaiting_confirmation", "awaiting_confirmation"
-            job.manifest = {**job.manifest, "segmentation_fallback": {"code": reason}}
-            row.lease_until = None
-            self._waiting(job)
-            await self._drop_signal(session, job.id)
-            self._write(
-                session,
-                row,
-                job,
-                "segmentation_fallback",
-                {"code": reason, "revision": job.plan_revision, "page_count": len(job.page_refs())},
-            )
-            return job
-
     async def lock_plan(self, job_id: str, fence: int) -> Job:
         """Блокирует auto/source plan перед extraction с проверкой актуального fence."""
-        async with self.sessions.begin() as session:
+        async with self._transaction() as session:
             row, job = await self._locked(session, job_id)
             self._assert_worker(row, job, fence)
             if job.approved_plan is None:
+                if not job.skip_segmentation and any(
+                    p.status != "completed" for p in job.comparisons
+                ):
+                    raise IntakeError(
+                        "segmentation_confirmation_required", "Есть неизвестные переходы", 409
+                    )
                 if not job.auto_split and not (
                     job.skip_segmentation and job.segmentation_source == "source_files"
                 ):

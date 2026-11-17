@@ -7,6 +7,7 @@ import logging
 import os
 import tempfile
 from pathlib import Path
+from time import monotonic
 from uuid import UUID
 
 from app.core.container import Container
@@ -25,14 +26,17 @@ async def process(container: Container, job_id: str) -> None:
         container.analysis.prepare if job.work_kind == "prepare" else container.analysis.execute
     )
     analysis = asyncio.create_task(operation(job))
+    heartbeat_at = monotonic() + container.settings.worker_lease_seconds / 3
     try:
         while not analysis.done():
-            done, _ = await asyncio.wait(
-                {analysis}, timeout=container.settings.worker_lease_seconds / 3
-            )
+            done, _ = await asyncio.wait({analysis}, timeout=0.25)
             if done:
                 break
-            if not await container.database.heartbeat(job.id, job.fence):
+            active = await container.database.is_active(job.id, job.fence)
+            if active and monotonic() >= heartbeat_at:
+                active = await container.database.heartbeat(job.id, job.fence)
+                heartbeat_at = monotonic() + container.settings.worker_lease_seconds / 3
+            if not active:
                 analysis.cancel()
                 break
         await analysis

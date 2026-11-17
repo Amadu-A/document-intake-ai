@@ -64,7 +64,7 @@ SSE-события имеют возрастающий `id`. `text_delta` сод
    `files[].documents[].attachment_file.file_url`. Проверить SHA-256/размер из status.
 
 Старые клиенты не передают новые flags и при корректном плане работают автоматически.
-Исключение — разрешённый владельцем резервный путь page_fallback, описанный ниже.
+Неопределённые переходы требуют проверки состава, как описано ниже.
 Интеграции обязаны различать awaiting_confirmation и успешное завершение.
 
 ## Необязательные режимы и редактор
@@ -126,27 +126,33 @@ revision: только одно успешно, второе `409 plan_version_c
 Start во время подготовки фиксирует намерение запустить анализ, подготовка не повторяется.
 Review освобождает worker/lease; после confirm используются OCR checkpoints и исходное
 предложение. Для ручных групп VLM извлекает внутренние приложения, сохраняя их страницы.
-Определение границ работает по изображениям без предварительного OCR всей пачки;
-Docling вызывается для извлечения после фиксации состава.
+Auto/review сначала выполняют Docling OCR всех страниц, затем N−1 текстовых
+сравнений соседей каждого файла. Изображения при определении границ не передаются.
+После подтверждения используются сохранённые OCR и vision-извлечение.
 `excluded_pages` присутствует только в plan/status-счётчиках/manifest; JSON 1.0 неизменен.
 
 UI использует `include_pages=false` для status/snapshot/SSE; изображения получает через
 пагинацию. Legacy default `include_pages=true` сохраняется. Новые события:
 `source_discovered`, `page_ready`, `preview_ready`, `mode_changed`, `draft_saved`,
 `plan_approved`, `plan_locked`; пути файловой системы в SSE не выдаются.
-Дополнительно: `ocr_retry` (attempt/http_status/retry_after_seconds) и
-`segmentation_fallback` (code/revision/page_count).
+Дополнительно: `ocr_retry` (attempt/http_status/retry_after_seconds),
+`pair_started` и `pair_result` (index, адреса соседей, status, attempts, solution,
+error_code, duration_seconds; без OCR/отпечатка). Порядок событий пар может отличаться
+от физического порядка; использовать index и PageRef.
 
-Если разделение не вернуло корректный план после повторов, auto-план не подтверждён
-VLM или истёк `VLM_SEGMENTATION_TIMEOUT_SECONDS`, статус —
-`awaiting_confirmation`, flags false/true, source `page_fallback`, `plan_locked=false`.
-`draft_plan` содержит по одной группе на физический лист, `fallback.code` в segmentation
-и `segmentation_fallback.code` в status объясняют причину. Это технический черновик,
-не семантический результат. `/start` и `/result` возвращают 409 до явного confirm;
-после правок/подтверждения используется ровно сохранённый состав. Автоматически
-подтверждать fallback интеграционным клиентом нельзя.
+Status/snapshot и segmentation содержат `comparisons`:
+`total`, `completed`, `errors`, `needs_review`, `transitions[]`.
+У unresolved перехода `solution=null`, а код объясняет причину. Running/pending
+не являются решениями. Успешный ответ имеет строго boolean и status=completed.
+После исчерпания ограниченных повторов или бюджета этапа статус —
+`awaiting_confirmation`, source — `vlm_partial`, `plan_locked=false`.
+Частичный draft соединяет только подтверждённые true; проблемные стыки показаны отдельно.
+Флаги исходного auto/review сохраняются. Нельзя считать provisional разрыв ответом false.
+До явного confirm `/result` недоступен; после — извлекается ровно утверждённый состав.
+В автоматическом режиме без ошибок confirm не нужен. Skip не выполняет сравнения;
+ручная правка по-прежнему включает skip. Разные источники автоматически не объединяются.
 
-Несмежный список страниц допустим: группа [101,103] не включает лист 102. Порядок
+В ручном составе несмежный список страниц допустим: группа [101,103] не включает лист 102. Порядок
 листов внутри PDF остаётся исходным. В UI Ctrl/Cmd выбирает отдельные листы,
 «Создать диапазон» переносит выбранные страницы из прежних групп в новую.
 

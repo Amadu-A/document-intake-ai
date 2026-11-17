@@ -8,7 +8,7 @@ from pydantic import Field
 
 from app.domain.errors import IntakeError
 from app.domain.schema import StrictModel
-from app.domain.segmentation import PageRef, Plan, PlannedAttachment
+from app.domain.segmentation import PageRef
 
 SegmentationSource = Literal[
     "source_files",
@@ -17,7 +17,7 @@ SegmentationSource = Literal[
     "vlm_confirmed",
     "manual",
     "manual_override",
-    "page_fallback",
+    "vlm_partial",
 ]
 
 
@@ -76,13 +76,21 @@ class ApprovedPlan(StrictModel):
         )
 
 
+class AttachmentPages(StrictModel):
+    """Физические страницы приложения, прочитанные на стадии извлечения."""
+
+    kind: str
+    pages: list[PageRef]
+    relation: str
+
+
 class FixedGroup(StrictModel):
-    """Граница manual/source_files для extraction; внутренние приложения ещё не определены VLM."""
+    """Фиксированная регистрационная группа; её внутренние приложения определяет extraction-VLM."""
 
     document_index: int
     pages: list[PageRef]
     main_pages: list[PageRef] = Field(default_factory=list)
-    attachments: list[PlannedAttachment] = Field(default_factory=list)
+    attachments: list[AttachmentPages] = Field(default_factory=list)
     probable_kind: str | None = None
     confidence: None = None
     reason: str = "Фиксированные регистрационные страницы"
@@ -137,25 +145,5 @@ def source_file_plan(pages: list[PageRef]) -> ManualPlan:
         documents=[
             ManualDocument(client_id=f"source-{index}", pages=group)
             for index, group in enumerate(groups.values(), 1)
-        ]
-    )
-
-
-def draft_from_vlm(plan: Plan) -> ManualPlan:
-    """Копирует предложенные регистрационные границы; приложения остаются в исходном VLM-плане."""
-    return ManualPlan(
-        documents=[
-            ManualDocument(client_id=f"vlm-{d.document_index}", pages=list(d.pages))
-            for d in plan.documents
-        ]
-    )
-
-
-def single_page_plan(pages: list[PageRef]) -> ManualPlan:
-    """Создаёт безопасный черновик по листам; он не является распознанными регистрациями."""
-    return ManualPlan(
-        documents=[
-            ManualDocument(client_id=f"page-{index}", pages=[page])
-            for index, page in enumerate(pages, 1)
         ]
     )
