@@ -83,6 +83,23 @@ class ScriptedVision:
         """Выдаёт заготовленный ответ либо минимальную корректную синтетическую группу."""
         self.calls.append({"prompt": prompt, "context": context, "pages": pages, "schema": schema})
         await emit("text_delta", {"text": "{synthetic stream}", "validated": False})
+        if schema.get("title") == "DocumentClassification":
+            if (
+                self.answers
+                and isinstance(self.answers[0], dict)
+                and "continuation_summary" in self.answers[0]
+            ):
+                return self.answers.popleft()
+            raw = next(
+                (v for v in self.answers if isinstance(v, dict) and "classification" in v), facts()
+            )
+            if not raw["classification"]["is_letter"] and self.answers and self.answers[0] is raw:
+                self.answers.popleft()
+            return {
+                "classification": raw["classification"],
+                "continuation_summary": raw["requisites"]["summary"],
+                "warnings": raw["warnings"],
+            }
         if schema.get("title") == "RelatedDatesReading" and (
             not self.answers
             or not isinstance(self.answers[0], dict)

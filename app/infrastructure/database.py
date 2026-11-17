@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.domain.comparisons import ALGORITHM_VERSION, Comparison
+from app.domain.document_processing import DocumentCheckpoint, DocumentProcessing
 from app.domain.errors import IntakeError, LeaseLost
 from app.domain.jobs import TERMINAL, Job, WorkProgress, utcnow
 from app.infrastructure.boundary_transactions import BoundaryTransactions
@@ -362,6 +363,21 @@ class Database(BoundaryTransactions):
                 if counter.completed > counter.total:
                     raise ValueError("Число завершённых операций превышает общее число")
                 job.work_progress[kind.removesuffix("_progress")] = counter
+            elif kind == "document_processing":
+                job.document_processing[data["document_id"]] = DocumentProcessing.model_validate(
+                    data["processing"]
+                )
+            elif kind == "document_completed":
+                cached = DocumentCheckpoint.model_validate(data["checkpoint"])
+                job.document_results[str(cached.group.document_index)] = cached
+                job.document_processing[data["document_id"]] = cached.processing
+                job.manifest = {
+                    **job.manifest,
+                    "documents": {
+                        **job.manifest.get("documents", {}),
+                        data["document_id"]: data["artifact"],
+                    },
+                }
             elif kind == "normalized":
                 job.manifest = data
                 for source in job.sources:

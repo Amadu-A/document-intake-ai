@@ -2,6 +2,7 @@
 """Полный двухстадийный VLM-конвейер; backend валидирует, но не угадывает границы."""
 
 import asyncio
+import hashlib
 import json
 import re
 from copy import deepcopy
@@ -9,6 +10,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from app.application.document_processing import ProcessDocument, part_context
 from app.application.inference_schema import extraction_schema
 from app.application.one_c_projection import (
     canonical_organization,
@@ -20,6 +22,7 @@ from app.application.ports import OCR, AnalysisSettings, Emit, JobRepository, St
 from app.application.related_dates import review_court_dates
 from app.core.observability import report_failure, timed
 from app.domain.boundaries import AttachmentPages, FixedGroup
+from app.domain.document_processing import MAX_VLM_PAGES, DocumentCheckpoint
 from app.domain.errors import IntakeError, LeaseLost
 from app.domain.extraction import ExtractionDraft, PrimaryDateReading
 from app.domain.jobs import Job
@@ -27,9 +30,11 @@ from app.domain.related_dates import RelatedDatesReading
 from app.domain.schema import (
     AttachmentFile,
     BatchResult,
+    Classification,
     Document,
     DocumentRoot,
     Extracted,
+    OneC,
     SourceFile,
 )
 from app.domain.segmentation import PageRef, page_spans, windows
@@ -142,6 +147,7 @@ class Analyze:
         self.repository, self.storage, self.vision = repository, storage, vision
         self.ocr, self.settings = ocr, settings
         self.pairwise = Pairwise(repository, vision, settings)
+        self.documents = ProcessDocument(settings, self._validated)
 
     async def _validated(
         self,
@@ -242,11 +248,16 @@ class Analyze:
         )
 
     async def _extract(
-        self, job: Job, group: FixedGroup, pages: list[dict], emit: Emit
+        self,
+        job: Job,
+        group: FixedGroup,
+        pages: list[dict],
+        emit: Emit,
+        classification: Classification | None = None,
     ) -> Extracted:
         """Извлекает факты всей группы; большие комплекты согласует повторным VLM-проходом."""
         organization = canonical_organization(job.organization_hint)
-        schema = extraction_schema(organization)
+        schema = extraction_schema(organization, classification)
         first_main = next(iter(group.main_pages or group.pages))
         context = {
             "organization_hint": organization,
@@ -276,6 +287,17 @@ class Analyze:
             "для повестки/постановления об удержании без установленного запроса — null; "
             "true только при явно требуемом письменном ответе.",
         }
+        if classification is not None:
+            context["selected_classification"] = classification.model_dump(mode="json")
+            context["letter_template"] = {
+                "kind": classification.document_kind,
+                "subkind": classification.document_subkind,
+                "template_path": classification.template_path,
+            }
+            context["rules"] += (
+                " Классификация уже определена для всего блока. Извлекай реквизиты "
+                "по выбранному шаблону письма; не меняй тип по его приложениям."
+            )
         if isinstance(group, FixedGroup):
             context["rules"] += (
                 " Страницы группы утверждены и неизменяемы. Определи основную часть и "
@@ -304,8 +326,19 @@ class Analyze:
                 " spans/main_spans — включительные сквозные позиции от 1; "
                 "преобразуй page_range приложений обратно в физические номера первого источника."
             )
-        chunks = windows(pages, self.settings.vlm_window_pages, self.settings.vlm_overlap_pages)
+        size = min(MAX_VLM_PAGES, self.settings.vlm_window_pages)
+        chunks = windows(pages, size, min(self.settings.vlm_overlap_pages, size - 1))
+
+        def validate_type(value: ExtractionDraft) -> None:
+            """Проверяет выбранный тип и при неполном окне, и при итоговом согласовании."""
+            if classification is not None and value.classification != classification:
+                raise IntakeError(
+                    "schema_validation_failed",
+                    "Тип блока не должен меняться при извлечении реквизитов",
+                )
+
         if len(chunks) == 1:
+            context["part"] = part_context(job, group, 1, 1)
             date_reading = None
             if group.attachments and group.main_pages:
                 main = set(group.main_pages)
@@ -373,6 +406,7 @@ class Analyze:
             def validate_facts(value: ExtractionDraft) -> None:
                 """Сверяет полный ответ с независимым визуальным чтением даты."""
                 validate_extraction(value, group, job.organization_hint)
+                validate_type(value)
                 if date_reading is not None and (
                     value.requisites.document_date != date_reading.document_date
                     or value.primary_readability.document_date != date_reading.readability
@@ -456,30 +490,34 @@ class Analyze:
                 main = [p for p in group.pages if p not in nested]
                 if attachments and main:
                     group.main_pages, group.attachments = main, attachments
-                    return await self._extract(job, group, pages, emit)
+                    return await self._extract(job, group, pages, emit, classification)
             if date_reading is not None:
                 facts.warnings = list(dict.fromkeys([*facts.warnings, *date_reading.warnings]))
             if facts.requisites.related_entities.court_cases:
                 facts = await review_court_dates(
                     facts, pages, first_main, job.prompts["extraction"], self._validated, emit
                 )
+            await emit("document_part_completed", {"part_index": 1, "parts_total": 1})
             return facts.facts()
         evidence = []
-        for chunk in chunks:
+        for index, chunk in enumerate(chunks, 1):
             partial = await self._validated(
                 job.prompts["extraction"],
                 {
                     **context,
                     "pages": page_context(chunk),
+                    "part": part_context(job, group, index, len(chunks)),
                     "instruction": "Собери факты окна группы с физическими page_range, "
-                    "не выдавай недоступные факты. Итог будет согласован отдельно.",
+                    "Не выдавай недоступные факты. Это продолжение того же блока. "
+                    "Учитывай has_previous/has_next. Итог будет согласован отдельно.",
                 },
                 chunk,
                 ExtractionDraft,
-                lambda _: None,
+                validate_type,
                 emit,
                 schema=schema,
             )
+            await emit("document_part_completed", {"part_index": index, "parts_total": len(chunks)})
             evidence.append(
                 {
                     "pages": [
@@ -504,12 +542,18 @@ class Analyze:
                     },
                     [],
                     ExtractionDraft,
-                    lambda _: None,
+                    validate_type,
                     emit,
                     schema=schema,
                 )
                 reduced.append({"facts": partial.model_dump(mode="json")})
             evidence = reduced
+
+        def validate_result(value: ExtractionDraft) -> None:
+            """Не позволяет согласованию изменить тип или выйти за страницы блока."""
+            validate_extraction(value, group, job.organization_hint)
+            validate_type(value)
+
         result = await self._validated(
             job.prompts["extraction"],
             {
@@ -520,7 +564,7 @@ class Analyze:
             },
             [],
             ExtractionDraft,
-            lambda p: validate_extraction(p, group, job.organization_hint),
+            validate_result,
             emit,
             schema=schema,
         )
@@ -664,13 +708,48 @@ class Analyze:
                     },
                 )
                 selected = [lookup[(p.file_id, p.page_number)] for p in group.pages]
-                facts = await self._extract(job, group, selected, emit)
+                document_id = artifacts[index - 1][0]
+
+                async def document_emit(kind: str, data: dict, identifier=document_id) -> None:
+                    """Привязывает диагностику к одному PDF без выдачи реквизитов в статусе."""
+                    if kind == "document_processing":
+                        await emit(kind, {"document_id": identifier, "processing": data})
+                    else:
+                        await emit(kind, data)
+
+                fingerprint = hashlib.sha256(
+                    json.dumps(
+                        [
+                            "document-processing-v1",
+                            job.prompts["extraction"],
+                            [p.model_dump() for p in group.pages],
+                        ],
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ).encode()
+                ).hexdigest()
+                cached = job.document_results.get(str(index))
+                if cached and cached.fingerprint == fingerprint:
+                    facts, processing = (
+                        cached.facts.model_copy(deep=True),
+                        cached.processing.model_copy(deep=True),
+                    )
+                    group = cached.group.model_copy(deep=True)
+                    groups[index - 1] = group
+                else:
+                    facts, processing = await self.documents.run(
+                        job, group, selected, self._extract, document_emit
+                    )
                 if not group.main_pages:
                     group.main_pages = list(group.pages)
                 manifest["documents"][artifacts[index - 1][0]]["group"] = group.model_dump(
                     mode="json"
                 )
-                facts.one_c = project_one_c(facts, job.organization_hint)
+                facts.one_c = (
+                    project_one_c(facts, job.organization_hint)
+                    if processing.status == "recognized"
+                    else OneC(organization=canonical_organization(job.organization_hint))
+                )
                 facts.recognition.ocr_engine = "docling"
                 facts.warnings.extend(plan_warnings)
                 if manifest["excluded_pages"]:
@@ -703,6 +782,7 @@ class Analyze:
                             "Сложный состав приложения: физические страницы указаны в manifest"
                         )
                 document_id, artifact = artifacts[index - 1]
+                facts.warnings = list(dict.fromkeys(facts.warnings))
                 files[primary].documents.append(
                     Document(
                         **facts.model_dump(),
@@ -716,6 +796,19 @@ class Analyze:
                     )
                 )
                 has_warnings |= bool(facts.warnings)
+                await emit(
+                    "document_completed",
+                    {
+                        "document_id": document_id,
+                        "artifact": manifest["documents"][document_id],
+                        "checkpoint": DocumentCheckpoint(
+                            fingerprint=fingerprint,
+                            facts=facts,
+                            group=group,
+                            processing=processing,
+                        ).model_dump(mode="json"),
+                    },
+                )
                 await emit("extraction_progress", {"completed": index, "total": len(groups)})
             result = BatchResult(batch_id=job.id, files=list(files.values())).model_dump(
                 mode="json"

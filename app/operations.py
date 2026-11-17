@@ -304,6 +304,11 @@ async def smoke(settings: Settings) -> None:
         data = result.json()
         if data["schema_version"] != "1.0" or not data["files"][0]["documents"]:
             raise OperationError("HTTP smoke: неверный экспорт")
+        if len(status["artifacts"]) != 1 or any(
+            (artifact.get("processing") or {}).get("status") != "recognized"
+            for artifact in status["artifacts"]
+        ):
+            raise OperationError("HTTP smoke: реквизиты тестового письма не подтверждены")
         # Отдельный клиент без cookie/API key имитирует скачивание 1С по capability URL.
         async with httpx.AsyncClient(timeout=30, trust_env=False) as downloader:
             for artifact in status["artifacts"] + status["sources"]:

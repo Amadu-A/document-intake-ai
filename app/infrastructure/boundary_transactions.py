@@ -242,6 +242,7 @@ class BoundaryTransactions:
         async with self._transaction() as session:
             row, job = await self._locked(session, job_id)
             self._assert_worker(row, job, fence)
+            job.document_processing = {}
             if job.approved_plan is None:
                 if not job.skip_segmentation and any(
                     p.status != "completed" for p in job.comparisons

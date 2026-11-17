@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     shared_vlm_model: str = "shared-vlm"
     vlm_enable_thinking: bool = False
     vlm_timeout_seconds: int = Field(180, ge=1, le=600)
-    vlm_window_pages: int = Field(8, ge=2, le=32)
+    vlm_window_pages: int = Field(8, ge=2, le=8)
     vlm_overlap_pages: int = Field(2, ge=1)
     vlm_reconciliation_windows: int = Field(4, ge=2, le=8)
     pair_concurrency: int = Field(4, ge=1, le=16)

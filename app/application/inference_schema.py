@@ -3,8 +3,9 @@
 
 from copy import deepcopy
 
+from app.domain.document_processing import DocumentClassification
 from app.domain.extraction import ExtractionDraft
-from app.domain.schema import DocumentRoot
+from app.domain.schema import Classification, DocumentRoot
 from app.domain.taxonomy import LETTER_PATHS
 
 
@@ -21,7 +22,9 @@ def _require_properties(value: object) -> None:
             _require_properties(child)
 
 
-def extraction_schema(organization_hint: str | None) -> dict:
+def extraction_schema(
+    organization_hint: str | None, selected: Classification | None = None
+) -> dict:
     """Ограничивает генерацию фактами контекста и каталогом без исправления ответа модели."""
     schema = ExtractionDraft.model_json_schema()
     definitions = schema["$defs"]
@@ -69,5 +72,27 @@ def extraction_schema(organization_hint: str | None) -> dict:
         properties["direction"] = {"type": "null"}
     properties["template_path"]["maxItems"] = 0
     definitions["Classification"] = {"title": classification["title"], "anyOf": [letter, other]}
+    if selected is not None:
+        definitions["Classification"] = {
+            "type": "object",
+            "properties": {
+                key: {"const": value} for key, value in selected.model_dump(mode="json").items()
+            },
+            "required": list(Classification.model_fields),
+            "additionalProperties": False,
+        }
+    _require_properties(schema)
+    return schema
+
+
+def classification_schema(organization_hint: str | None) -> dict:
+    """Использует тот же закрытый каталог в отдельной короткой схеме первого этапа."""
+    schema = DocumentClassification.model_json_schema()
+    definitions = extraction_schema(organization_hint)["$defs"]
+    for key in schema.get("$defs", {}):
+        if key in definitions:
+            schema["$defs"][key] = deepcopy(definitions[key])
+    if not organization_hint:
+        schema["properties"]["warnings"]["minItems"] = 1
     _require_properties(schema)
     return schema

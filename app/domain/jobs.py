@@ -8,6 +8,7 @@ from pydantic import Field
 
 from app.domain.boundaries import ApprovedPlan, ManualPlan, SegmentationSource
 from app.domain.comparisons import ALGORITHM_VERSION, Comparison
+from app.domain.document_processing import DocumentCheckpoint, DocumentProcessing
 from app.domain.errors import IntakeError
 from app.domain.schema import StrictModel
 from app.domain.segmentation import PageRef
@@ -90,6 +91,8 @@ class Job(StrictModel):
     processing_deadline_at: datetime | None = None
     work_progress: dict[Literal["ocr", "extraction"], WorkProgress] = Field(default_factory=dict)
     work_stage: str | None = None
+    document_processing: dict[str, DocumentProcessing] = Field(default_factory=dict)
+    document_results: dict[str, DocumentCheckpoint] = Field(default_factory=dict)
 
     def page_refs(self) -> list[PageRef]:
         """Перечисляет обнаруженные физические страницы в порядке источников, независимо от PNG."""

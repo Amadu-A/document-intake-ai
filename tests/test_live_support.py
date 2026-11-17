@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from app.domain.errors import IntakeError
 from tests.live_support import run_comparison
 from tests.support import SyntheticOCR, facts, pdf_bytes
+from tests.test_document_processing import classification
 
 KEY = {"X-API-Key": "e" * 48}
 
@@ -40,6 +41,36 @@ def local_worker_hook(container):
                 await container.analysis.execute(job)
 
     return execute
+
+
+@pytest.mark.parametrize("expected_status", ["unsupported_template", "recognized"])
+async def test_runner_compares_placeholder_status_and_downloads(
+    tmp_path, client, container, expected_status
+):
+    """Матрица проверяет реальный статус заглушки; наличие PDF не означает готовые реквизиты."""
+    source = tmp_path / "nonletter.pdf"
+    source.write_bytes(pdf_bytes())
+    container.vision.answers.append(classification(False))
+    client.event_hooks["response"].append(local_worker_hook(container))
+    case = {**comparison_case(source.name), "processing_status": expected_status}
+    case["checks"].append(
+        {"path": "requisites.related_entities.contracts", "expected": [], "page": 1}
+    )
+    report = await run_comparison(
+        client,
+        [case],
+        tmp_path,
+        tmp_path / "private.json",
+        headers=KEY,
+        job_timeout_seconds=10,
+        poll_interval=0,
+    )
+    row = next(r for r in report["rows"] if r["field_path"] == "documents.0.processing.status")
+    assert row["actual"] == "unsupported_template"
+    assert (row["status"] == "match") is (expected_status == "unsupported_template")
+    assert report["cases"][0]["status"] == (
+        "match" if expected_status == "unsupported_template" else "mismatch"
+    )
 
 
 async def test_runner_continues_all_cases_and_preserves_private_failure_report(

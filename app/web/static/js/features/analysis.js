@@ -85,8 +85,9 @@ export function initializeAnalysis(viewer) {
         const result = await api(`/api/v1/jobs/${id}/result`, { signal });
         if (!current(own, id)) return;
         confirmed = result; json.textContent = JSON.stringify(result, null, 2);
-        get("[data-validation]").textContent = "✓ Проверенный результат · schema_version 1.0";
-        get("[data-export]").disabled = false; renderFacts(result); boundaries.result(result);
+        const incomplete = Object.values(data.document_processing || {}).some(p => p.status !== "recognized");
+        get("[data-validation]").textContent = incomplete ? "JSON 1.0 · есть блоки без распознанных реквизитов · см. предупреждения" : "✓ Проверенный результат · schema_version 1.0";
+        get("[data-export]").disabled = false; renderFacts(result, data.document_processing); boundaries.result(result);
         journal("json_ready", {}); paint();
       }
       if (terminal.has(data.status)) { source?.close(); clearTimeout(pollTimer); }
@@ -104,7 +105,7 @@ export function initializeAnalysis(viewer) {
     /** Все обработчики замыкают идентификатор и поколение своего задания. */
     source?.close(); const own = generation, id = jobId;
     const stream = new EventSource(`/api/v1/jobs/${id}/events?after=${cursor}&include_pages=false`); source = stream;
-    for (const kind of ["created", "queued", "started", "stage", "normalized", "source_discovered", "page_ready", "preview_ready", "mode_changed", "draft_saved", "plan_approved", "plan_locked", "segmentation", "pair_started", "pair_result", "ocr_progress", "extraction_progress", "ocr_retry", "model_retry", "retry", "warning", "terminal", "text_delta", "expired"]) {
+    for (const kind of ["created", "queued", "started", "stage", "normalized", "source_discovered", "page_ready", "preview_ready", "mode_changed", "draft_saved", "plan_approved", "plan_locked", "segmentation", "pair_started", "pair_result", "ocr_progress", "extraction_progress", "document_processing", "document_completed", "ocr_retry", "model_retry", "retry", "warning", "terminal", "text_delta", "expired"]) {
       stream.addEventListener(kind, event => {
         if (!current(own, id) || cancelling) return;
         cursor = Math.max(cursor, Number(event.lastEventId) || 0); const data = JSON.parse(event.data);

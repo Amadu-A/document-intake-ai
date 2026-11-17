@@ -300,6 +300,20 @@ async def _documents(
         prefix = f"documents.{index}"
         artifact = by_id.get(document["document_id"], {})
         _row(rows, prefix + ".artifact_present", True, bool(artifact))
+        if expected_status := case.get("processing_status"):
+            _row(
+                rows,
+                prefix + ".processing.status",
+                expected_status,
+                (artifact.get("processing") or {}).get("status"),
+            )
+            if expected_status == "unsupported_template":
+                _row(
+                    rows,
+                    prefix + ".unsupported_template_warning",
+                    True,
+                    any("[template_not_supported]" in w for w in document["warnings"]),
+                )
         await _download_checks(
             client,
             rows,
@@ -404,6 +418,9 @@ async def _run_case(
             actual = "MISSING"
         if isinstance(actual, str):
             actual = actual[:512]
+        elif row["expected"] == [] and isinstance(actual, list):
+            # Матрица заглушек проверяет отсутствие полей, не экспортируя содержимое списков.
+            actual = [] if not actual else "NONEMPTY_COLLECTION"
         elif actual is not None and not isinstance(actual, (int, float, bool)):
             actual = "UNSUPPORTED_VALUE"
         row.update(

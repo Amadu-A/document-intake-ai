@@ -12,7 +12,8 @@ from playwright.async_api import async_playwright, expect
 
 from app.main import create_app
 from app.worker import process
-from tests.support import pdf_bytes
+from tests.support import facts, pdf_bytes
+from tests.test_document_processing import classification
 
 pytestmark = pytest.mark.browser
 
@@ -54,6 +55,66 @@ async def panel_server(container, unused_tcp_port):
             await delivery
         server.should_exit = True
         await serving
+
+
+async def test_panel_mixed_result_keeps_export_and_explicit_block_statuses(container, panel_server):
+    """Заглушка и отказ блока видны после reload; проверенное письмо и все PDF доступны."""
+    container.vision.answers.extend(
+        [
+            {"solution": False},
+            {"solution": False},
+            classification(False),
+            classification(),
+            *[{} for _ in range(container.settings.model_attempts)],
+            classification(),
+            facts(),
+        ]
+    )
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch()
+        page = await browser.new_page(viewport={"width": 1680, "height": 1100})
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        try:
+            await page.goto(panel_server)
+            await page.locator('[data-segmentation-mode][value="auto"]').check()
+            await page.locator("[data-files]").set_input_files(
+                {"name": "mixed.pdf", "mimeType": "application/pdf", "buffer": pdf_bytes(3)}
+            )
+            await expect(page.locator("[data-start]")).to_be_enabled(timeout=30000)
+            await page.locator("[data-start]").click()
+            await expect(page.locator("[data-export]")).to_be_enabled(timeout=60000)
+            await page.reload()
+            await expect(page.locator("[data-processing-title]")).to_have_text(
+                "Обработка завершена", timeout=15000
+            )
+            await expect(page.locator("[data-processing-description]")).to_have_text(
+                "Распознано писем: 1. Без шаблона: 1. Требуют проверки: 1. PDF всех блоков готовы."
+            )
+            await expect(page.locator("[data-validation]")).to_have_text(
+                "JSON 1.0 · есть блоки без распознанных реквизитов · см. предупреждения"
+            )
+            await expect(page.locator("[data-facts]")).to_contain_text(
+                "Тип определён · шаблон реквизитов пока не реализован"
+            )
+            await expect(page.locator("[data-facts]")).to_contain_text(
+                "Реквизиты не подтверждены · PDF сохранён"
+            )
+            await expect(page.locator("[data-facts]")).to_contain_text("Процессуальные документы")
+            links = page.locator("[data-facts] a")
+            assert await links.count() == 3
+            for link in await links.all():
+                response = await page.request.get(await link.get_attribute("href"))
+                assert response.status == 200
+                assert (await response.body()).startswith(b"%PDF")
+            assert "processing--error" not in await page.locator("[data-processing]").get_attribute(
+                "class"
+            )
+            assert not errors
+            await asyncio.to_thread(Path("tmp").mkdir, exist_ok=True)
+            await page.screenshot(path="tmp/document-mixed-completed.png", full_page=True)
+        finally:
+            await browser.close()
 
 
 async def test_panel_default_confirmation_real_counters_and_polling(container, panel_server):

@@ -1,6 +1,7 @@
 // app/web/static/js/features/results.js
 /** Карточки VLM-плана, реквизиты и журнал без вставки недоверенного HTML. */
 import { sourceLabel } from "./boundary_state.js";
+const processingLabels = { recognized: "Реквизиты письма извлечены", unsupported_template: "Тип определён · шаблон реквизитов пока не реализован", classification_failed: "Тип не подтверждён · PDF сохранён", extraction_failed: "Реквизиты не подтверждены · PDF сохранён" };
 export function renderPlan(snapshot, viewer) {
   /** Показывает регистрационные группы и приложения исключительно для просмотра. */
   const target = document.querySelector("[data-documents]"); target.replaceChildren();
@@ -18,6 +19,11 @@ export function renderPlan(snapshot, viewer) {
       button.addEventListener("click", () => viewer.select(ref)); pageButtons.append(button);
     });
     card.append(title, pageButtons);
+    const processing = Object.values(snapshot.document_processing || {}).find(p => p.segment_index === index + 1);
+    if (processingLabels[processing?.status]) {
+      const status = document.createElement("p"); status.className = "structure__reason";
+      status.textContent = processingLabels[processing.status]; card.append(status);
+    }
     const proposal = snapshot.plan?.documents?.[index] || segmentation?.proposed_plan?.documents?.[index];
     const attachments = segmentation?.segmentation_source?.startsWith("manual") ? [] : (doc.attachments || proposal?.attachments || []);
     attachments.forEach(attachment => {
@@ -37,7 +43,7 @@ export function renderPlan(snapshot, viewer) {
     `${documents.length} ${segmentation?.locked ? "регистрационных документов" : "диапазонов черновика"} · ${count} приложений · ${segmentation?.locked ? "состав заблокирован" : "черновик состава"}${documents.length > 60 ? " · показаны первые 60, остальные доступны через ленту" : ""}` : "Здесь появится состав документов";
 }
 
-export function renderFacts(result) {
+export function renderFacts(result, processing = {}) {
   /** Формирует доступное текстовое представление подтверждённых реквизитов и warnings. */
   const target = document.querySelector("[data-facts]"); target.replaceChildren();
   const warnings = document.querySelector("[data-warnings]"); warnings.replaceChildren();
@@ -45,11 +51,15 @@ export function renderFacts(result) {
   document.querySelector("[data-count-attachments]").textContent = allDocuments.reduce((sum, doc) => sum + doc.requisites.attachments.length, 0);
   result.files.forEach(source => source.documents.forEach(doc => {
     const title = document.createElement("h3"); title.textContent = doc.requisites.title || "Документ"; target.append(title);
+    if (processingLabels[processing[doc.document_id]?.status]) {
+      const status = document.createElement("p"); status.className = "result__validation";
+      status.textContent = processingLabels[processing[doc.document_id].status]; target.append(status);
+    }
     const list = document.createElement("dl");
     for (const [label, value] of Object.entries({
       "Номер": doc.requisites.document_number, "Дата": doc.requisites.document_date,
       "Отправитель": doc.requisites.sender.name, "Адресат": doc.requisites.recipient.name,
-      "Классификация": doc.classification.template_path.join(" → "),
+      "Классификация": (doc.classification.template_path.length ? doc.classification.template_path : [doc.classification.document_root, doc.classification.document_kind, doc.classification.document_subkind].filter(Boolean)).join(" → "),
       "Содержание": doc.requisites.summary,
     })) {
       const term = document.createElement("dt"), definition = document.createElement("dd");
@@ -72,8 +82,13 @@ export function journal(event, data) {
   if (event === "comparisons_progress") text = `Проверка границ: ${data.completed} из ${data.total}`;
   if (event === "approved") text = `Подтверждены ${data.count} документов`;
   if (event === "json_ready") text = "JSON сформирован";
+  if (["document_processing", "document_completed"].includes(event) && data.processing) {
+    const p = data.processing;
+    text = `Документ ${p.segment_index}: ` + (processingLabels[p.status] || (p.stage === "classification" ? "Определяем тип" : "Извлекаем реквизиты"));
+  }
   if (event === "pair_result" && data.status === "unresolved") text = "Требуется проверка границы между страницами";
   if (!text) return;
+  if (document.querySelector("[data-journal]").lastElementChild?.textContent === text) return;
   const item = document.createElement("li"); item.textContent = text;
   const target = document.querySelector("[data-journal]"); target.append(item);
   while (target.children.length > 200) target.firstElementChild.remove();

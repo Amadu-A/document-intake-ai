@@ -14,11 +14,12 @@ class Prompts:
     def __init__(self, repository: PromptRepository, directory: Path) -> None:
         """Подключает repository и каталог утверждённых промптов при сборке приложения."""
         self.repository = repository
-        self.versions = {"segmentation": "v4", "extraction": "v4"}
+        self.versions = {"segmentation": "v4", "extraction": "v5"}
         self.base = {
             stage: (directory / f"{stage}-{self.versions[stage]}.txt").read_text("utf-8")
             for stage in ("segmentation", "extraction")
         }
+        self.previous_extraction = (directory / "extraction-v4.txt").read_text("utf-8")
 
     async def get(self, owner: str) -> dict:
         """Возвращает оба текста и стабильные хеши базовых версий."""
@@ -26,6 +27,8 @@ class Prompts:
         values = {key: (saved or {}).get(key, text) for key, text in self.base.items()}
         if not saved or saved.get("_segmentation_version") != self.versions["segmentation"]:
             values["segmentation"] = self.base["segmentation"]
+        if values["extraction"] == self.previous_extraction:
+            values["extraction"] = self.base["extraction"]
         return {
             "prompts": values,
             "base_prompts": dict(self.base),

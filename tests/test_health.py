@@ -2,15 +2,19 @@
 """Readiness требует OCR растрового PDF и vision-маркер; doubles не доказывают shared runtime."""
 
 import asyncio
+import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pymupdf
 import pytest
+from pydantic import SecretStr
 
 from app.domain.errors import IntakeError
 from app.infrastructure.health import Health, raster_probe
+from app.operations import OperationError, smoke
 
 
 def test_ocr_probe_has_image_without_searchable_text(tmp_path):
@@ -88,3 +92,62 @@ async def test_health_preserves_safe_docling_failure_and_continues_checks(settin
     assert await health.ready() == result
     assert ocr.recognize.await_count == 1
     assert database.ping.await_count == rabbit.require_consumer.await_count == 2
+
+
+@pytest.mark.parametrize(
+    "processing",
+    ["recognized", "unsupported_template", "classification_failed", "extraction_failed", None],
+)
+async def test_http_smoke_requires_recognized_letter_not_just_available_pdf(
+    settings, monkeypatch, processing
+):
+    """Bootstrap не объявляет PASS для заглушки/отказа, даже если JSON и PDF доступны."""
+    settings.api_keys["evaluation"] = SecretStr("e" * 48)
+    content = b"%PDF-SYNTHETIC-DOWNLOAD"
+    downloads = []
+
+    def respond(request):
+        """Возвращает явно синтетический HTTP-контракт без shared-сервисов и документов."""
+        path = request.url.path
+        if path == "/api/v1/jobs" and request.method == "POST":
+            return httpx.Response(202, json={"job_id": "synthetic"})
+        if path == "/api/v1/jobs/synthetic":
+            return httpx.Response(
+                200,
+                json={
+                    "status": "completed_with_warnings",
+                    "sources": [],
+                    "artifacts": [
+                        {
+                            "processing": {"status": processing} if processing else None,
+                            "file_url": "http://testserver/download",
+                            "sha256": hashlib.sha256(content).hexdigest(),
+                            "byte_size": len(content),
+                        }
+                    ],
+                },
+            )
+        if path.endswith("/result"):
+            return httpx.Response(
+                200, json={"schema_version": "1.0", "files": [{"documents": [{}]}]}
+            )
+        if path == "/download":
+            downloads.append(path)
+            return httpx.Response(200, content=content)
+        assert path in {"/", "/docs", "/health/live", "/health/ready"}
+        return httpx.Response(200, json={})
+
+    original = httpx.AsyncClient
+
+    def client(**kwargs):
+        """Сохраняет production smoke, заменяя только сетевой транспорт тестовым."""
+        return original(transport=httpx.MockTransport(respond), **kwargs)
+
+    monkeypatch.setattr("app.operations.httpx.AsyncClient", client)
+    if processing == "recognized":
+        await smoke(settings)
+        assert downloads == ["/download"]
+    else:
+        with pytest.raises(OperationError, match="реквизиты тестового письма не подтверждены"):
+            await smoke(settings)
+        assert not downloads

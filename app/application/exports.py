@@ -164,6 +164,9 @@ class Exports:
                 "byte_size": item["byte_size"],
                 "sha256": item["sha256"],
                 "file_url": self.signed(job, self.document_path(job.id, document_id)),
+                "processing": job.document_processing[document_id].model_dump()
+                if document_id in job.document_processing
+                else None,
             }
             for document_id, item in job.manifest.get("documents", {}).items()
         ]
@@ -173,6 +176,10 @@ class Exports:
             "stage": job.stage,
             "progress": job.progress,
             "work_stage": job.work_stage,
+            "document_processing": {
+                identifier: processing.model_dump()
+                for identifier, processing in job.document_processing.items()
+            },
             "work_progress": {
                 stage: counter.model_dump() for stage, counter in job.work_progress.items()
             },
@@ -220,6 +227,11 @@ class Exports:
         """Удаляет приватные пути из событий; новый SSE клиент не получает полный реестр PNG."""
         if kind in {"pair_started", "pair_result"}:
             return {k: v for k, v in data.items() if k != "fingerprint"}
+        if kind == "document_completed":
+            return {
+                "document_id": data["document_id"],
+                "processing": data["checkpoint"]["processing"],
+            }
         if kind == "normalized":
             return {
                 "pages": self.status(job, include_pages)["pages"],
