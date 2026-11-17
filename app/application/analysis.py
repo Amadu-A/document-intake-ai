@@ -23,6 +23,7 @@ from app.domain.boundaries import AttachmentPages, FixedGroup
 from app.domain.errors import IntakeError, LeaseLost
 from app.domain.extraction import ExtractionDraft, PrimaryDateReading
 from app.domain.jobs import Job
+from app.domain.related_dates import RelatedDatesReading
 from app.domain.schema import (
     AttachmentFile,
     BatchResult,
@@ -194,6 +195,8 @@ class Analyze:
                     emit,
                 )
                 parsed = model.model_validate(raw)
+                if isinstance(parsed, RelatedDatesReading):
+                    candidate = parsed.model_dump(mode="json")
                 if isinstance(parsed, ExtractionDraft):
                     candidate = parsed.model_dump(mode="json")
                     uncertain_fields.update(parsed.uncertain_fields())

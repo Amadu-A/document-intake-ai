@@ -282,3 +282,66 @@ async def test_reading_schema_only_allows_current_reference_indices_and_page_add
     assert allowed == {(PAGE.file_id, 1), (other.file_id, 9)}
     assert {PageRef.model_validate(p) for p in call["context"]["allowed_pages"]} == {PAGE, other}
     assert RelatedDatesReading.model_json_schema() == before_schema
+
+
+@pytest.mark.parametrize("problem", ["date_format", "truncated_quote"])
+async def test_related_date_retry_receives_candidate_and_exact_conflicting_field(
+    container, problem
+):
+    """Повтор исправляет формат или обрезанную цитату второй даты, сохраняя первую ссылку."""
+    original = draft("2031-01-12")
+    references = original.requisites.related_entities.court_cases
+    references.append(references[0].model_copy(update={"number": "ACT-2/2031"}))
+    first = evidence()
+    second = {**evidence(), "index": 1}
+    second["source_quote"] = "Акт №ACT-2/2031 от 12 января 2031 года"
+    invalid = {"readings": [first, second]}
+    corrected = copy.deepcopy(invalid)
+    corrected["readings"][1]["date_literal"] = "12 января 2031 года"
+    if problem == "truncated_quote":
+        second["source_quote"] = "должностное лицо вынесло акт №ACT-2/2031"
+        corrected["readings"][1]["source_quote"] = (
+            "12.01.2031 должностное лицо вынесло акт №ACT-2/2031"
+        )
+        corrected["readings"][1]["date_literal"] = "12.01.2031"
+    container.vision.answers.extend([invalid, corrected])
+    before = original.model_dump(mode="json")
+
+    async def emit(kind, data):
+        """Не выводит частные цитаты в журнал."""
+
+    result = await review_court_dates(
+        original, [PAGE.model_dump()], PAGE, "Промпт", container.analysis._validated, emit
+    )
+    assert original.model_dump(mode="json") == before
+    assert [ref.date for ref in result.requisites.related_entities.court_cases] == [
+        date(2031, 1, 12),
+        date(2031, 1, 12),
+    ]
+    initial, retry = container.vision.calls
+    assert "candidate" not in initial["context"]
+    assert retry["context"]["candidate"] == invalid
+    assert "readings[index=1].date_literal" in str(retry["context"]["validation_errors"])
+    assert retry["pages"] == initial["pages"]
+    assert retry["schema"] == initial["schema"]
+
+
+async def test_exhausted_related_date_retries_never_publish_unverified_date(container):
+    """Повторяющееся несовпадение не ослабляет доказательство и не меняет исходные факты."""
+    original = draft("2030-01-01")
+    invalid = evidence()
+    invalid["source_quote"] = "Акт №ACT-1/2031 от 13.01.2031"
+    container.vision.answers.extend(
+        [{"readings": [invalid]} for _ in range(container.settings.model_attempts)]
+    )
+    before = original.model_dump(mode="json")
+
+    async def emit(kind, data):
+        """Не выводит синтетическое содержимое в обычные логи."""
+
+    with pytest.raises(IntakeError, match="ограниченных повторов"):
+        await review_court_dates(
+            original, [PAGE.model_dump()], PAGE, "Промпт", container.analysis._validated, emit
+        )
+    assert original.model_dump(mode="json") == before
+    assert len(container.vision.calls) == container.settings.model_attempts

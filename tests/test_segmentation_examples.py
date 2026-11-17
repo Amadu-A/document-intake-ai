@@ -8,7 +8,13 @@ import pytest
 
 from app.domain.boundaries import ManualPlan, validate_assignment
 from app.domain.segmentation import PageRef
-from tests.segmentation_support import compare_groups, expected_groups, sequential_expected
+from tests.segmentation_support import (
+    ReferenceUnavailable,
+    compare_groups,
+    expected_groups,
+    sequential_expected,
+    sequential_reference,
+)
 
 CASES = [
     ("Полученные_письма_по_почте_рф_06_11_2026", 173, 111),
@@ -25,7 +31,10 @@ def test_private_segmentation_examples_cover_every_physical_page(name, pages, gr
         pytest.skip("NOT_RUN: приватные примеры недоступны")
     with pymupdf.open(path) as document:
         assert len(document) == pages
-    expected = sequential_expected(path, pages)
+    try:
+        expected = sequential_expected(path, pages)
+    except ReferenceUnavailable as exc:
+        pytest.skip(f"NOT_RUN: {exc}")
     assert len(expected) == groups
     if pages == 173:
         assert [101, 103] not in expected and [101] in expected and [102] in expected
@@ -44,14 +53,61 @@ def test_private_segmentation_examples_cover_every_physical_page(name, pages, gr
     ]
 
 
-def test_new_ground_truth_cannot_be_derived_from_noncontiguous_old_ranges(tmp_path):
-    """Исторический [1,3] не исправляется и не используется как новое модельное ожидание."""
+@pytest.mark.parametrize("suffix", ["_cut.json", ".json"])
+def test_confirmed_historical_ranges_have_separate_contiguous_projection(tmp_path, suffix):
+    """Исторический [1,3] сохраняется; ожидание соседних границ учитывает чужой лист 2."""
     pdf = tmp_path / "synthetic.pdf"
-    old = tmp_path / "synthetic_cut.json"
+    old = tmp_path / ("synthetic" + suffix)
     old.write_text('{"range":[[1,3],2]}', "utf-8")
-    with pytest.raises(ValueError, match="Несмежный"):
-        sequential_expected(pdf, 3)
+    groups, provenance = sequential_reference(pdf, 3)
+    assert groups == [[1], [2], [3]]
+    assert provenance["mode"] == "historical_contiguous_projection"
+    assert provenance["source_file"] == old.name
+    assert expected_groups(old, 3) == [[1, 3], [2]]
     assert old.read_text("utf-8") == '{"range":[[1,3],2]}'
+
+
+def test_historical_projection_preserves_runs_and_independent_adjacent_documents(tmp_path):
+    """Разрывает только пробелы; разные соседние группы не сливаются."""
+    pdf = tmp_path / "synthetic.pdf"
+    source = tmp_path / "synthetic.json"
+    source.write_text('{"range":[[1,2,8],[3,4],[5,6],7]}', "utf-8")
+    assert sequential_expected(pdf, 8) == [[1, 2], [3, 4], [5, 6], [7], [8]]
+
+
+def test_explicit_sequential_reference_wins_over_historical_source(tmp_path):
+    """Новый подтверждённый файл имеет приоритет над прежними группами."""
+    pdf = tmp_path / "synthetic.pdf"
+    (tmp_path / "synthetic_cut.json").write_text('{"range":[[1,3],2]}', "utf-8")
+    explicit = tmp_path / "synthetic.adjacent.expected.json"
+    explicit.write_text('{"range":[[1,2],3]}', "utf-8")
+    groups, provenance = sequential_reference(pdf, 3)
+    assert groups == [[1, 2], [3]] and provenance["mode"] == "sequential"
+    assert provenance["source_file"] == explicit.name
+
+
+@pytest.mark.parametrize("content", ['{"range":[[1,3],2]}', '{"range":[1]}'])
+def test_invalid_explicit_reference_is_never_replaced_by_legacy_source(tmp_path, content):
+    """Ошибка нового эталона остаётся ошибкой даже при наличии корректного старого."""
+    pdf = tmp_path / "synthetic.pdf"
+    (tmp_path / "synthetic.adjacent.expected.json").write_text(content, "utf-8")
+    (tmp_path / "synthetic_cut.json").write_text('{"range":[1,2,3]}', "utf-8")
+    with pytest.raises(ValueError):
+        sequential_expected(pdf, 3)
+
+
+def test_missing_private_reference_is_reported_as_not_run(tmp_path, monkeypatch):
+    """Неполный необязательный набор приватных файлов не ломает общий quality gate."""
+    from tests.support import pdf_bytes
+
+    monkeypatch.chdir(tmp_path)
+    directory = tmp_path / "examples"
+    directory.mkdir()
+    (directory / "synthetic.pdf").write_bytes(pdf_bytes(3))
+    with pytest.raises(pytest.skip.Exception, match="NOT_RUN"):
+        test_private_segmentation_examples_cover_every_physical_page("synthetic", 3, 1)
+    with pytest.raises(ReferenceUnavailable):
+        sequential_expected(directory / "synthetic.pdf", 3)
 
 
 @pytest.mark.parametrize(

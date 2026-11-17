@@ -131,14 +131,28 @@ def validate_related_dates(
             raise IntakeError(
                 "schema_validation_failed", "Читаемая связанная дата требует цитаты и страницы"
             )
-        if (
-            not contains_number(entry.source_quote, references[entry.index])
-            or identifier_key(entry.date_literal) not in identifier_key(entry.source_quote)
-            or literal_date(entry.date_literal) != entry.date
-        ):
+        path = f"readings[index={entry.index}]"
+        if not contains_number(entry.source_quote, references[entry.index]):
             raise IntakeError(
                 "schema_validation_failed",
-                "Связанная дата/номер не подтверждены source_quote и date_literal. "
-                "Приведи точную цитату связывания номера с собственной датой, "
-                "без исправления источника.",
+                f"{path}.source_quote не содержит точный номер ссылки. "
+                "Перечитай источник и приведи цитату с номером и его собственной датой.",
+            )
+        if identifier_key(entry.date_literal) not in identifier_key(entry.source_quote):
+            raise IntakeError(
+                "schema_validation_failed",
+                f"{path}.date_literal отсутствует в source_quote. "
+                "Скопируй буквальное написание даты из цитаты, сохрани цифры, слова "
+                "и разделители источника; ISO-нормализация допустима только в date. "
+                "Если дата напечатана в начале предложения, расширь source_quote "
+                "до полного предложения с датой и номером. "
+                "Если цитата не подтверждает собственную дату ссылки, верни date=null, "
+                "date_literal=null, readability=ambiguous и warning.",
+            )
+        if literal_date(entry.date_literal) != entry.date:
+            raise IntakeError(
+                "schema_validation_failed",
+                f"{path}.date не соответствует date_literal. "
+                "Нормализуй только однозначно прочитанную буквальную дату; "
+                "при неоднозначности верни null и warning.",
             )

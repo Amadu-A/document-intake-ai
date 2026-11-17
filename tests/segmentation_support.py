@@ -3,6 +3,7 @@
 
 import ast
 import asyncio
+import hashlib
 import json
 from collections import Counter
 from pathlib import Path
@@ -51,19 +52,50 @@ def compare_groups(expected: list[list[int]], actual: list[list[int]]) -> dict:
     }
 
 
-def sequential_expected(pdf: Path, count: int) -> list[list[int]]:
-    """Читает отдельный подтверждённый эталон; исторические несмежные группы не преобразует."""
+class ReferenceUnavailable(FileNotFoundError):
+    """Приватный PDF не сопровождается подтверждённым эталоном для проверки."""
+
+
+def sequential_reference(pdf: Path, count: int) -> tuple[list[list[int]], dict]:
+    """Создаёт отдельное ожидание соседних границ из эталона владельца до обращения к модели."""
+    explicit = pdf.with_name(pdf.stem + ".adjacent.expected.json")
     candidates = [
-        pdf.with_name(pdf.stem + ".adjacent.expected.json"),
+        explicit,
         pdf.with_name(pdf.stem + "_cut.json"),
+        pdf.with_suffix(".json"),
     ]
     path = next((p for p in candidates if p.exists()), None)
     if path is None:
-        raise ValueError("Нужен подтверждённый последовательный эталон, независимый от модели")
+        raise ReferenceUnavailable(
+            f"Для {pdf.name} нужен .adjacent.expected.json, _cut.json или исходный JSON с range"
+        )
     groups = expected_groups(path, count)
-    if any(group != list(range(group[0], group[-1] + 1)) for group in groups):
-        raise ValueError("Несмежный исторический эталон несовместим с новым авторазделением")
-    return groups
+    noncontiguous = any(group != list(range(group[0], group[-1] + 1)) for group in groups)
+    if path == explicit and noncontiguous:
+        raise ValueError("Явный последовательный эталон содержит несмежную группу")
+    if noncontiguous:
+        # Принадлежность соседей уже задана владельцем: дальнюю связь разрывает
+        # новый контракт. Соседние листы разных исходных групп не объединяются.
+        runs = []
+        for group in groups:
+            run = []
+            for page in group:
+                if run and page != run[-1] + 1:
+                    runs.append(run)
+                    run = []
+                run.append(page)
+            runs.append(run)
+        groups = sorted(runs, key=lambda group: group[0])
+    return groups, {
+        "source_file": path.name,
+        "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "mode": "historical_contiguous_projection" if noncontiguous else "sequential",
+    }
+
+
+def sequential_expected(pdf: Path, count: int) -> list[list[int]]:
+    """Возвращает последовательное ожидание, не изменяя исходный эталон или результат модели."""
+    return sequential_reference(pdf, count)[0]
 
 
 async def run_segmentation_case(
@@ -74,7 +106,7 @@ async def run_segmentation_case(
 
     with pymupdf.open(pdf) as document:
         count = len(document)
-    expected = sequential_expected(pdf, count)
+    expected, reference = sequential_reference(pdf, count)
     began = monotonic()
     with pdf.open("rb") as stream:
         response = await client.post(
@@ -109,6 +141,7 @@ async def run_segmentation_case(
                 "error_code": (snapshot.get("error") or {}).get("code"),
                 "seconds": round(monotonic() - began, 2),
                 "expected": expected,
+                "reference": reference,
                 "actual": actual,
                 **compare_groups(expected, actual),
             }
