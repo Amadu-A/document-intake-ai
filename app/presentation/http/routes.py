@@ -314,6 +314,20 @@ async def source_file(
     return await download(container, job_id, "source", file_id, owner, token)
 
 
+@router.post("/jobs/{job_id}/archive")
+async def prepare_archive(job_id: str, container: Services, owner: Owner):
+    """Подготавливает именованные PDF в ZIP; незавершённый пакет возвращает 409."""
+    return await container.exports.prepare_archive(job_id, owner)
+
+
+@router.get("/jobs/{job_id}/archive")
+async def archive_file(
+    job_id: str, container: Services, owner: OptionalOwner, token: str | None = None
+):
+    """Потоково отдаёт ZIP по owner/capability с обычной проверкой TTL."""
+    return await download(container, job_id, "archive", "", owner, token)
+
+
 @router.get("/jobs/{job_id}/documents/{document_id}/file")
 async def document_file(
     job_id: str,

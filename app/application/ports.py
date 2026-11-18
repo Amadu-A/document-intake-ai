@@ -169,6 +169,10 @@ class Storage(Protocol):
         """Создаёт целый PDF-комплект, возвращает размер, хеш и приватный путь."""
         ...
 
+    async def archive(self, job: Job, documents: list[dict]) -> dict:
+        """Собирает ZIP готовых комплектов на диске с реальным размером и SHA-256."""
+        ...
+
 
 class Vision(Protocol):
     """JSON/vision вызов общего VLM; модельные решения всегда непроверенные."""

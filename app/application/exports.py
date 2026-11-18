@@ -6,11 +6,13 @@ from datetime import timedelta
 
 from app.application.intake import Intake
 from app.application.ports import DownloadSigner
+from app.core.observability import timed
 from app.domain.boundaries import (
     source_file_plan,
     validate_assignment,
 )
 from app.domain.comparisons import ALGORITHM_VERSION, adjacent_comparisons
+from app.domain.document_names import document_filename
 from app.domain.errors import IntakeError
 from app.domain.jobs import TERMINAL, Job, utcnow
 from app.domain.schema import BatchResult
@@ -33,6 +35,44 @@ class Exports:
     def document_path(self, job_id: str, document_id: str) -> str:
         """Возвращает стабильный REST-путь единого PDF-комплекта."""
         return f"/api/v1/jobs/{job_id}/documents/{document_id}/file"
+
+    def archive_path(self, job_id: str) -> str:
+        """Даёт независимый от web путь ZIP всех регистраций пачки."""
+        return f"/api/v1/jobs/{job_id}/archive"
+
+    async def _archive(self, job: Job) -> dict:
+        """Берёт проверенные факты и целые PDF в глобальном порядке утверждённых блоков."""
+        if job.status not in {"completed", "completed_with_warnings"} or not job.result:
+            raise IntakeError(
+                "archive_not_ready", "Архив доступен после обработки утверждённых блоков", 409
+            )
+        result = BatchResult.model_validate(job.result)
+        documents = sorted(
+            (d for source in result.files for d in source.documents), key=lambda d: d.segment_index
+        )
+        entries = []
+        for document in documents:
+            item = job.manifest.get("documents", {}).get(document.document_id)
+            if not item:
+                raise IntakeError("artifact_not_found", "Не найден PDF утверждённого блока", 404)
+            entries.append(
+                {**item, "file_name": document_filename(document.segment_index, document)}
+            )
+        if not entries:
+            raise IntakeError("archive_not_ready", "Нет готовых документов для архива", 409)
+        artifact = await self.intake.storage.archive(job, entries)
+        job.authorize(job.owner)
+        return artifact
+
+    @timed("prepare_document_archive")
+    async def prepare_archive(self, job_id: str, owner: str) -> dict:
+        """Подготавливает ZIP без повторных VLM-вызовов; возвращает только безопасную ссылку."""
+        job = await self.intake.get(job_id, owner)
+        artifact = await self._archive(job)
+        return {
+            **{key: artifact[key] for key in ("file_name", "byte_size", "sha256")},
+            "file_url": self.signed(job, self.archive_path(job_id)),
+        }
 
     def signed(self, job: Job, path: str) -> str:
         """Активному заданию выдаёт короткую ссылку; terminal-ссылку ограничивает итоговым TTL."""
@@ -220,6 +260,7 @@ class Exports:
                 "events": f"/api/v1/jobs/{job.id}/events",
                 "pages": f"/api/v1/jobs/{job.id}/pages",
                 "segmentation": f"/api/v1/jobs/{job.id}/segmentation",
+                "archive": self.archive_path(job.id),
             },
         }
 
@@ -280,6 +321,8 @@ class Exports:
             path = self.source_path(job_id, item_id)
         elif kind == "document":
             path = self.document_path(job_id, item_id)
+        elif kind == "archive":
+            path = self.archive_path(job_id)
         else:
             suffix = "thumbnail" if kind == "thumbnail" else "preview"
             path = f"/api/v1/jobs/{job_id}/pages/{item_id}/{page_number}/{suffix}"
@@ -292,6 +335,8 @@ class Exports:
             allow_expired=bool(job.expires_at and job.expires_at <= utcnow()),
         )
         job.authorize(job.owner if signed else (owner or ""))
+        if kind == "archive":
+            return job, await self._archive(job)
         if kind == "source":
             source = next((s for s in job.sources if s.file_id == item_id), None)
             if source:

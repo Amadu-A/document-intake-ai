@@ -4,6 +4,7 @@ import { api, notice } from "../api.js";
 import { previewURL, clearPreviews } from "../previews.js";
 import { pageKey, sourceLabel, groupFor, splitRange, mergeRanges, excludePages, createRange, moveBoundary, coversPages, orderedPages, movePages } from "./boundary_state.js";
 import { modeFlags, modeFromFlags } from "./modes.js";
+import { createPageDrag } from "./page_drag.js";
 
 export function createBoundaryEditor(viewer, changed, controlsChanged = () => {}) {
   /** Хранит метаданные; изображения и URL запрашивает порциями по 60 страниц. */
@@ -20,6 +21,14 @@ export function createBoundaryEditor(viewer, changed, controlsChanged = () => {}
   const moveDialog = document.querySelector("[data-page-move-dialog]"), moveTarget = document.querySelector("[data-page-move-target]"), moveError = document.querySelector("[data-page-move-error]");
   let moveRevision = null;
   const endpoint = () => `/api/v1/jobs/${snapshot.job_id}`;
+  const pageDrag = createPageDrag(scroll, track, () => ({
+    enabled: !!snapshot?.preview_complete && !saved?.locked && !busy && !editing && !["failed", "cancelled", "expired"].includes(snapshot?.status) && !(snapshot?.expires_at && Date.parse(snapshot.expires_at) <= Date.now()),
+    stamp: `${snapshot?.job_id}:${saved?.plan_revision}`, pages: physical, key: pageKey,
+    selected: physical.filter(p => selected.has(pageKey(p))),
+  }), ref => { if (!selected.has(pageKey(ref))) selection(ref); controls(); }, async (chosen, target, side) => {
+    try { await save(movePages(plan, chosen, target, side, physical), "page_move"); }
+    catch (error) { notice(error.message, true); controls(); }
+  }, message => { saveLabel.textContent = message; controls(); });
   function flags() { /** Читает единственное выбранное значение радиогруппы. */ return modeFlags(modes.find(control => control.checked).value); }
   function selectMode(mode) { /** Серверный ACK восстанавливает одно выбранное значение. */ for (const control of modes) control.checked = control.value === mode; }
   async function metadata(ref) {
@@ -63,7 +72,7 @@ export function createBoundaryEditor(viewer, changed, controlsChanged = () => {}
     }
     document.querySelector("[data-page-move-submit]").disabled = busy || locked || !snapshot?.preview_complete;
     if (locked && moveDialog.open) moveDialog.close();
-    confirm.disabled = locked || busy || !!editing || !saved?.can_confirm || !coversPages(plan, physical) || !plan.documents.length;
+    confirm.disabled = locked || busy || !!editing || pageDrag.active() || !saved?.can_confirm || !coversPages(plan, physical) || !plan.documents.length;
     controlsChanged();
   }
   function render() {
@@ -78,9 +87,10 @@ export function createBoundaryEditor(viewer, changed, controlsChanged = () => {}
     const localGeneration = generation;
     for (const ref of filtered.slice(first, first + count)) {
       const group = groupFor(plan, ref), groupIndex = plan?.documents.indexOf(group), global = physical.findIndex(p => pageKey(p) === pageKey(ref));
-      const card = document.createElement("div"); card.dataset.position = global;
+      const card = document.createElement("div"); card.dataset.position = global; card.dataset.pageKey = pageKey(ref);
       card.className = "boundary__page" + (group ? ` boundary__page--tone-${groupIndex % 6}` : " boundary__page--excluded") + (selected.has(pageKey(ref)) ? " boundary__page--selected" : "");
       const button = document.createElement("button"); button.type = "button"; button.className = "boundary__select";
+      button.dataset.pageDrag = ""; button.title = "Перетащите мышью перед или после другой страницы";
       button.setAttribute("aria-label", `Просмотреть страницу ${global + 1}`); button.setAttribute("aria-pressed", String(selected.has(pageKey(ref))));
       const pending = document.createElement("span"); pending.className = "boundary__pending"; pending.textContent = "Готовим превью…";
       const number = document.createElement("span"); number.className = "boundary__number"; number.textContent = `Стр. ${global + 1} · исходная ${ref.page_number}`;
@@ -109,7 +119,7 @@ export function createBoundaryEditor(viewer, changed, controlsChanged = () => {}
     track.replaceChildren(fragment);
     scroll.scrollLeft = scrollPosition;
     if (focused) Array.from(track.querySelectorAll("button[aria-label]")).find(button => button.getAttribute("aria-label") === focused)?.focus({ preventScroll: true });
-    controls();
+    pageDrag.paint(); controls();
   }
   function handle(card, group, side, position) {
     /** Мышь и клавиатура используют общую проверяемую операцию перемещения. */
@@ -232,7 +242,7 @@ export function createBoundaryEditor(viewer, changed, controlsChanged = () => {}
   return {
     reset() {
       /** Отзывает запросы/жесты и удаляет все данные прежнего пакета. */
-      generation++; controller.abort(); controller = new AbortController(); dragCleanup();
+      generation++; controller.abort(); controller = new AbortController(); dragCleanup(); pageDrag.reset();
       snapshot = saved = savedStatus = plan = editing = lastJob = activePageKey = null;
       original = []; physical = []; filtered = []; history = []; selected.clear(); cache.clear(); requests.clear(); finalRoles.clear(); busy = false; anchor = 0;
       if (moveDialog.open) moveDialog.close(); moveRevision = null;
@@ -245,7 +255,8 @@ export function createBoundaryEditor(viewer, changed, controlsChanged = () => {}
       const jump = document.querySelector("[data-page-jump]"); jump.value = "1"; jump.max = 1;
       savedMessage(); controls();
     },
-    flags, pending: () => busy || !!editing,
+    flags, pending: () => busy || !!editing || pageDrag.active(),
+    confirm: () => mutate("/segmentation/confirm", "POST", {}),
     expire() { /** Закрывает локальные действия и RAM-кеш сразу по TTL. */ if (snapshot) snapshot.status = "expired"; clearPreviews(); controls(); },
     result(value) {
       /** Показывает приложения ручных групп только после проверенного извлечения. */

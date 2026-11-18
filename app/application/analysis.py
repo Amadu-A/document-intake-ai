@@ -22,6 +22,7 @@ from app.application.ports import OCR, AnalysisSettings, Emit, JobRepository, St
 from app.application.related_dates import review_court_dates
 from app.core.observability import report_failure, timed
 from app.domain.boundaries import AttachmentPages, FixedGroup
+from app.domain.document_names import document_filename
 from app.domain.document_processing import MAX_VLM_PAGES, DocumentCheckpoint
 from app.domain.errors import IntakeError, LeaseLost
 from app.domain.extraction import ExtractionDraft, PrimaryDateReading
@@ -782,6 +783,8 @@ class Analyze:
                             "Сложный состав приложения: физические страницы указаны в manifest"
                         )
                 document_id, artifact = artifacts[index - 1]
+                artifact["file_name"] = document_filename(index, facts)
+                manifest["documents"][document_id]["file_name"] = artifact["file_name"]
                 facts.warnings = list(dict.fromkeys(facts.warnings))
                 files[primary].documents.append(
                     Document(

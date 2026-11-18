@@ -10,10 +10,12 @@
   <div class="processing__actions" aria-label="Управление обработкой">
     <button class="button button--primary" type="button" data-start hidden disabled>▶ Запустить анализ</button>
     <button class="button button--primary" type="button" data-confirm-plan hidden disabled>Подтвердить диапазоны</button>
+    <button class="button button--teal" type="button" data-cut-download hidden disabled>Разрезать и скачать</button>
     <button class="button" type="button" data-cancel hidden>Отменить обработку</button>
     <button class="button button--teal" type="button" data-export hidden disabled>↓ Экспорт JSON</button>
     <button class="button" type="button" data-new-analysis>＋ Новый пакет</button>
   </div>
+  <p class="processing__archive-error" data-archive-error role="alert" hidden></p>
   <ol class="processing__steps" aria-label="Последовательность обработки" data-processing-steps>
     <li class="processing__step" data-processing-step="preview">Превью</li>
     <li class="processing__step" data-processing-step="ocr">OCR</li>

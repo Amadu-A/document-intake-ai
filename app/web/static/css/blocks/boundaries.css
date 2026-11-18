@@ -27,6 +27,12 @@
 .boundary__page--tone-5 { --range-color: #df7785; }
 .boundary__page--excluded { border-style: dashed; background: #f4f5f8; }
 .boundary__page--selected { outline: 2px solid var(--color-blue); outline-offset: 2px; }
+.boundary__select { cursor: grab; }
+.boundary__scroll--dragging, .boundary__scroll--dragging .boundary__select { cursor: grabbing; user-select: none; }
+.boundary__page--dragging { opacity: .45; }
+.boundary__page--drop-before::before, .boundary__page--drop-after::after { content: ""; position: absolute; z-index: 4; top: -5px; bottom: 0; width: 4px; border-radius: 2px; background: var(--color-teal); pointer-events: none; }
+.boundary__page--drop-before::before { left: -6px; }
+.boundary__page--drop-after::after { right: -6px; }
 .boundary__select { border: 0; background: none; width: 100%; padding: 9px 5px 6px; color: var(--color-text); font-family: inherit; }
 .boundary__image { display: block; width: 70px; height: 92px; object-fit: contain; background: white; margin: 0 auto 5px; box-shadow: 0 2px 7px #203b5e1f; }
 .boundary__pending { display: grid; place-items: center; height: 92px; font-size: 10px; color: var(--color-muted); }

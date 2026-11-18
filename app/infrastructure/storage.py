@@ -8,7 +8,9 @@ import os
 import shutil
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
+from time import monotonic
 from uuid import UUID, uuid4
 
 from app.application.ports import Emit, Upload
@@ -27,6 +29,7 @@ class FileStorage:
         self.settings = settings
         self.root = settings.data_dir.resolve()
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._archive_lock = asyncio.Lock()
 
     def directory(self, job_id: str) -> Path:
         """Разрешает только UUID задания и гарантирует принадлежность пути хранилищу."""
@@ -292,3 +295,76 @@ class FileStorage:
             }
 
         return await asyncio.to_thread(metadata)
+
+    async def archive(self, job: Job, documents: list[dict]) -> dict:
+        """Кеширует ZIP атомарно; потоки и отмена не оставляют доступного неполного архива."""
+        identity = hashlib.sha256(
+            json.dumps(
+                [(d["file_name"], d["sha256"]) for d in documents], ensure_ascii=False
+            ).encode()
+        ).hexdigest()
+        directory = self.directory(job.id)
+        path = directory / f"archive-{identity}.zip"
+        deadline = monotonic() + self.settings.conversion_timeout_seconds
+
+        def build() -> dict:
+            """Копирует PDF порциями, проверяет их хеши, TTL и свободное место без RAM-архива."""
+
+            def alive() -> None:
+                """Не публикует файлы после TTL и не создаёт удалённый cleanup каталог заново."""
+                job.authorize(job.owner)
+                if monotonic() >= deadline:
+                    raise IntakeError("archive_timeout", "Истёк срок сборки архива", 503)
+                if not directory.is_dir():
+                    raise IntakeError("artifact_not_found", "Данные пакета уже удалены", 404)
+
+            alive()
+            if not path.is_file():
+                self._disk_space(sum(d["byte_size"] for d in documents) + 65536 * len(documents))
+                temporary = directory / f"archive-{uuid4()}.tmp"
+                try:
+                    with zipfile.ZipFile(temporary, "x", compression=zipfile.ZIP_STORED) as archive:
+                        for item in documents:
+                            source = self.resolve(item["path"])
+                            if not source.is_relative_to(directory) or not source.is_file():
+                                raise IntakeError(
+                                    "artifact_not_found", "PDF-комплект недоступен", 404
+                                )
+                            digest, size = hashlib.sha256(), 0
+                            with (
+                                source.open("rb") as stream,
+                                archive.open(item["file_name"], "w", force_zip64=True) as target,
+                            ):
+                                while chunk := stream.read(256 * 1024):
+                                    alive()
+                                    self._disk_space(len(chunk))
+                                    digest.update(chunk)
+                                    size += len(chunk)
+                                    target.write(chunk)
+                            if size != item["byte_size"] or digest.hexdigest() != item["sha256"]:
+                                raise IntakeError(
+                                    "artifact_integrity", "Нарушена целостность PDF-комплекта", 409
+                                )
+                    alive()
+                    os.replace(temporary, path)
+                finally:
+                    temporary.unlink(missing_ok=True)
+            alive()
+            with path.open("rb") as stream:
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            return {
+                "path": str(path),
+                "file_name": "documents.zip",
+                "mime_type": "application/zip",
+                "byte_size": path.stat().st_size,
+                "sha256": digest,
+            }
+
+        async with self._archive_lock:
+            task = asyncio.create_task(asyncio.to_thread(build))
+            try:
+                return await asyncio.shield(task)
+            except asyncio.CancelledError:
+                # Дожидаемся закрытия ZIP/file descriptors до освобождения single-flight lock.
+                await asyncio.gather(task, return_exceptions=True)
+                raise

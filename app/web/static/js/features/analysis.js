@@ -5,6 +5,7 @@ import { clearPreviews } from "../previews.js";
 import { renderPlan, renderFacts, journal } from "./results.js";
 import { createBoundaryEditor } from "./boundaries.js";
 import { renderProcessing } from "./processing.js";
+import { createArchive } from "./archive.js";
 
 const terminal = new Set(["completed", "completed_with_warnings", "failed", "cancelled"]);
 const labels = { uploaded: "Загружено", queued: "В очереди", running: "Обработка", awaiting_confirmation: "Ожидает проверки состава", completed: "Завершено", completed_with_warnings: "Завершено с предупреждениями", failed: "Ошибка", cancelled: "Отменено" };
@@ -15,6 +16,7 @@ export function initializeAnalysis(viewer) {
   let source = null, cursor = 0, pollTimer = null, refreshTimer = null, raw = "";
   let generation = 0, fetching = null, stopped = false, uploading = false, cancelling = false, exported = false;
   let starting = false, transportError = null;
+  let archive = null;
   let reads = new AbortController();
   const get = selector => document.querySelector(selector);
   const start = get("[data-start]"), input = get("[data-files]"), organization = get("[data-organization]"), json = get("[data-json]");
@@ -23,9 +25,11 @@ export function initializeAnalysis(viewer) {
     while (fetching === own) await new Promise(resolve => setTimeout(resolve, 30));
     if (own === generation) await refresh();
   }, paint);
+  archive = createArchive(get("[data-cut-download]"), () => boundaries.confirm(), () => { exported = true; });
   function paint() {
     /** Перерисовывает панель из того же snapshot, что используют просмотр и редактор. */
     renderProcessing(snapshot, { uploading, cancelling, starting, pending: boundaries.pending(), confirmed: !!confirmed, error: transportError, unavailable: stopped });
+    archive?.update(snapshot, boundaries.pending() || uploading || cancelling || stopped);
   }
   const current = (own, id) => own === generation && id === jobId;
   function close() {
@@ -35,7 +39,7 @@ export function initializeAnalysis(viewer) {
   }
   function reset() {
     /** Полностью освобождает пакет без перезагрузки страницы. */
-    generation++; close(); jobId = null; snapshot = confirmed = null; cursor = 0; raw = "";
+    generation++; close(); archive.reset(); jobId = null; snapshot = confirmed = null; cursor = 0; raw = "";
     fetching = null; stopped = uploading = cancelling = exported = starting = false; transportError = null;
     sessionStorage.removeItem("intake_job"); input.value = ""; input.disabled = false;
     organization.value = ""; organization.disabled = false; start.disabled = true;
