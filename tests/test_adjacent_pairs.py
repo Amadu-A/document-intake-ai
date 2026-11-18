@@ -262,6 +262,36 @@ async def test_pair_stage_timeout_preserves_unknowns_and_stops_pending_calls(con
     )
 
 
+async def test_timeout_drains_cancelled_workers_before_writing_unknown_results(container):
+    """Checkpoint таймаута ждёт закрытия всех sibling-запросов и их транзакций."""
+    job, pages = await prepared(container, 3)
+    container.settings.vlm_segmentation_timeout_seconds = 0.03
+    active = 0
+    results = []
+
+    async def request(prompt, context, *args):
+        """Второй запрос освобождает ресурсы позже первого при одновременной отмене."""
+        nonlocal active
+        active += 1
+        try:
+            await asyncio.Event().wait()
+        finally:
+            if context["left_page"]["page_number"] == 2:
+                await asyncio.sleep(0.1)
+            active -= 1
+
+    async def emit(kind, data):
+        """Не разрешает запись результатов до завершения cleanup отменённых siblings."""
+        if kind == "pair_result":
+            assert active == 0
+            results.append(data)
+
+    container.vision.request = request
+    plan = await asyncio.wait_for(container.analysis.pairwise.run(job, pages, emit), 3)
+    assert active == 0 and len(results) == 2 and len(plan.documents) == 3
+    assert all(result["error_code"] == "pair_stage_timeout" for result in results)
+
+
 async def test_restart_does_not_reset_exhausted_attempt_budget(container):
     """Обрыв последней попытки не разрешает бесконечно повторять её при каждом restart."""
     job, pages = await prepared(container, 3)

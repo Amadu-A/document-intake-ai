@@ -51,7 +51,7 @@ class Pairwise:
         self.slots = asyncio.Semaphore(settings.pair_concurrency)
 
     async def run(self, job: Job, pages: list[dict], emit: Emit) -> ManualPlan:
-        """Возобновляет только незавершённые пары с тем же OCR и снимком промпта."""
+        """Возобновляет пары; при таймауте дожидается cleanup перед записью результатов."""
         pairs = adjacent_comparisons(job.page_refs())
         lookup = {
             (p["file_id"], p["page_number"]): p.get("ocr_full", p.get("ocr", "")) for p in pages
@@ -131,10 +131,20 @@ class Pairwise:
             asyncio.create_task(worker())
             for _ in range(min(self.settings.pair_concurrency, pending.qsize()))
         ]
+        timed_out = False
         try:
             async with asyncio.timeout(self.settings.vlm_segmentation_timeout_seconds):
                 await asyncio.gather(*tasks)
         except TimeoutError:
+            timed_out = True
+        finally:
+            for task in tasks:
+                if not task.done() and not task.cancelling():
+                    task.cancel()
+            # Gather может завершиться после первого cancelled child. Остальные должны
+            # закрыть транзакции до новых checkpoint, без повторной отмены их cleanup.
+            await asyncio.gather(*tasks, return_exceptions=True)
+        if timed_out:
             for pair in pairs:
                 if pair.status != "completed":
                     pair.status, pair.solution, pair.error_code = (
@@ -143,11 +153,6 @@ class Pairwise:
                         "pair_stage_timeout",
                     )
                     await emit("pair_result", pair.model_dump(mode="json"))
-        finally:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
         groups, _ = sequential_ranges(job.page_refs(), pairs)
         return ManualPlan(
             documents=[

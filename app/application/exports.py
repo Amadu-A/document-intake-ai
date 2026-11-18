@@ -12,7 +12,7 @@ from app.domain.boundaries import (
     validate_assignment,
 )
 from app.domain.comparisons import ALGORITHM_VERSION, adjacent_comparisons
-from app.domain.document_names import document_filename
+from app.domain.document_names import document_archive_name
 from app.domain.errors import IntakeError
 from app.domain.jobs import TERMINAL, Job, utcnow
 from app.domain.schema import BatchResult
@@ -56,7 +56,7 @@ class Exports:
             if not item:
                 raise IntakeError("artifact_not_found", "Не найден PDF утверждённого блока", 404)
             entries.append(
-                {**item, "file_name": document_filename(document.segment_index, document)}
+                {**item, "file_name": document_archive_name(document.segment_index, document)}
             )
         if not entries:
             raise IntakeError("archive_not_ready", "Нет готовых документов для архива", 409)

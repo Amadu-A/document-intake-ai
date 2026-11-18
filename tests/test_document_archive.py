@@ -11,7 +11,7 @@ from datetime import timedelta
 import pymupdf
 import pytest
 
-from app.domain.document_names import document_filename
+from app.domain.document_names import document_archive_name, document_filename
 from app.domain.schema import Extracted
 from app.worker import process
 from tests.support import facts
@@ -37,7 +37,9 @@ def test_document_names_use_only_verified_primary_facts(kind, number, date, expe
             is_letter=False, document_root="Договоры", document_kind=kind
         )
     value["requisites"].update(document_number=number, document_date=date)
-    assert document_filename(3, Extracted.model_validate(value)) == expected
+    parsed = Extracted.model_validate(value)
+    assert document_filename(3, parsed) == expected
+    assert document_archive_name(3, parsed) == "doc_3/" + expected.removeprefix("doc_3_")
 
 
 def test_name_length_and_letter_direction_are_windows_safe():
@@ -86,8 +88,10 @@ async def completed_packet(client, container):
     return identifier, order
 
 
-async def test_zip_follows_approved_global_order_names_hashes_and_page_sequence(client, container):
-    """ZIP сохраняет имена блоков и ручной порядок из разных исходников."""
+async def test_zip_follows_approved_global_order_names_hashes_and_page_sequence(
+    client, container, tmp_path
+):
+    """Папки ZIP сохраняют имена блоков и ручной порядок из разных исходников."""
     identifier, order = await completed_packet(client, container)
     path = f"/api/v1/jobs/{identifier}/archive"
     calls = len(container.vision.calls)
@@ -107,10 +111,15 @@ async def test_zip_follows_approved_global_order_names_hashes_and_page_sequence(
         (d for f in result["files"] for d in f["documents"]), key=lambda d: d["segment_index"]
     )
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
-        assert archive.namelist() == ["doc_1_Письмо_42_Б_2026-11-18.pdf", "doc_2_Счёт.pdf"]
+        assert archive.namelist() == ["doc_1/Письмо_42_Б_2026-11-18.pdf", "doc_2/Счёт.pdf"]
+        archive.extractall(tmp_path / "unpacked")
         for index, document in enumerate(documents):
-            name = document["attachment_file"]["file_name"]
+            prefix = f"doc_{document['segment_index']}"
+            name = (
+                prefix + "/" + document["attachment_file"]["file_name"].removeprefix(prefix + "_")
+            )
             raw = archive.read(name)
+            assert (tmp_path / "unpacked" / name).read_bytes() == raw
             single = await client.get(document["attachment_file"]["file_url"])
             assert raw == single.content
             with pymupdf.open(stream=raw) as pdf:
@@ -120,6 +129,27 @@ async def test_zip_follows_approved_global_order_names_hashes_and_page_sequence(
     assert len(list(container.storage.directory(identifier).glob("archive-*.zip"))) == 1
     assert not list(container.storage.directory(identifier).glob("*.tmp"))
     assert len(container.vision.calls) == calls
+
+
+async def test_archive_folder_layout_replaces_flat_cache_without_name_collision(client, container):
+    """Одинаковые базовые имена разделены папками; старый плоский ZIP не переиспользуется."""
+    data = await create(client, pages=2)
+    identifier = data["job_id"]
+    container.vision.answers.extend([{"solution": False}, facts(), facts()])
+    await process(container, identifier)
+    job = await container.database.get(identifier)
+    entries = list(job.manifest["documents"].values())
+    flat = await container.storage.archive(job, entries)
+    with zipfile.ZipFile(flat["path"]) as archive:
+        assert archive.namelist() == ["doc_1_Письмо.pdf", "doc_2_Письмо.pdf"]
+    response = await client.get(f"/api/v1/jobs/{identifier}/archive", headers=KEY)
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        assert archive.namelist() == ["doc_1/Письмо.pdf", "doc_2/Письмо.pdf"]
+        for index, name in enumerate(archive.namelist(), 1):
+            with pymupdf.open(stream=archive.read(name)) as pdf:
+                assert len(pdf) == 1 and pdf[0].get_text().strip() == f"SYNTHETIC PAGE {index}"
+    assert response.headers["x-content-sha256"] != flat["sha256"]
 
 
 async def test_archive_owner_capability_and_expiration(client, container, monkeypatch):

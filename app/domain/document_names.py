@@ -15,8 +15,8 @@ def filename_part(value: str, limit: int) -> str:
     return value.strip(" ._")[:limit].rstrip(" ._")
 
 
-def document_filename(index: int, facts: Extracted) -> str:
-    """Строит doc_N_вид[_номер][_дата].pdf только из собственных реквизитов документа."""
+def document_basename(facts: Extracted) -> str:
+    """Строит вид[_номер][_дата].pdf только из собственных реквизитов документа."""
     classification = facts.classification
     if classification.is_letter:
         kind = {"incoming": "Входящее письмо", "outgoing": "Исходящее письмо"}.get(
@@ -24,7 +24,7 @@ def document_filename(index: int, facts: Extracted) -> str:
         )
     else:
         kind = classification.document_kind or "Документ"
-    parts = [f"doc_{index}", filename_part(kind, 48) or "Документ"]
+    parts = [filename_part(kind, 48) or "Документ"]
     if facts.requisites.document_number:
         number = filename_part(facts.requisites.document_number, 32)
         if number:
@@ -32,3 +32,13 @@ def document_filename(index: int, facts: Extracted) -> str:
     if facts.requisites.document_date:
         parts.append(facts.requisites.document_date.isoformat())
     return "_".join(parts) + ".pdf"
+
+
+def document_filename(index: int, facts: Extracted) -> str:
+    """Сохраняет уникальный номер пачки в имени отдельно скачиваемого PDF и JSON 1.0."""
+    return f"doc_{index}_{document_basename(facts)}"
+
+
+def document_archive_name(index: int, facts: Extracted) -> str:
+    """Помещает PDF без префикса в папку doc_N; прямой слеш обязателен для ZIP на всех ОС."""
+    return f"doc_{index}/{document_basename(facts)}"

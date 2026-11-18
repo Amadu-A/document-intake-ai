@@ -102,7 +102,7 @@ async def test_mouse_drop_autoscroll_cancel_and_archive_use_server_approved_orde
             download = await event.value
             assert download.suggested_filename == "documents.zip"
             with zipfile.ZipFile(await download.path()) as archive:
-                assert archive.namelist() == ["doc_1_Письмо.pdf"]
+                assert archive.namelist() == ["doc_1/Письмо.pdf"]
                 with pymupdf.open(stream=archive.read(archive.namelist()[0])) as pdf:
                     assert [p.get_text().strip() for p in pdf] == [
                         f"SYNTHETIC PAGE {n}" for n in order
@@ -166,7 +166,7 @@ async def test_multiselection_drop_joins_target_group_and_archive_retry(panel_se
                 await page.locator("[data-cut-download]").click()
             download = await event.value
             with zipfile.ZipFile(await download.path()) as archive:
-                assert archive.namelist() == ["doc_1_Письмо.pdf", "doc_2_Письмо.pdf"]
+                assert archive.namelist() == ["doc_1/Письмо.pdf", "doc_2/Письмо.pdf"]
             assert (await read_plan(page))["approved_revision"] == current["plan_revision"]
             page.on("dialog", lambda dialog: dialog.accept())
             await page.locator("[data-new-analysis]").click()
