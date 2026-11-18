@@ -4,15 +4,36 @@
 import asyncio
 import hashlib
 import json
+import logging
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from time import monotonic
 
 import httpx
 
 from app.application.ports import Emit
 from app.domain.errors import IntakeError
+
+
+async def persist_checkpoint(write: Callable[..., None], *args) -> None:
+    """Завершает начатую атомарную запись до отмены, не оставляя гонку с восстановлением."""
+    saving = asyncio.create_task(asyncio.to_thread(write, *args))
+    cancelled = False
+    while True:
+        try:
+            await asyncio.shield(saving)
+            break
+        except asyncio.CancelledError:
+            if saving.cancelled():
+                raise
+            # gather и внешний watchdog могут независимо отменить одну coroutine.
+            # Каждую отмену запоминаем, не передавая её в незавершённую запись.
+            cancelled = True
+    if cancelled:
+        raise asyncio.CancelledError
 
 
 def retry_delay(response: httpx.Response, attempt: int) -> float:
@@ -109,8 +130,14 @@ class DoclingTasks:
             await asyncio.sleep(delay)
         raise AssertionError("Настройка DOCLING_MAX_ATTEMPTS должна быть положительной")
 
-    async def wait(self, identifier: str, emit: Emit) -> httpx.Response:
-        """Ждёт завершения и читает результат; timeout/отмена сохраняют checkpoint задачи."""
+    async def wait(self, identifier: str, emit: Emit, *, resumed: bool = False) -> httpx.Response:
+        """Ждёт ту же task; измеряет наблюдаемую очередь/обработку без приватного payload.
+
+        Времена определяются по опросу, а не по недоступным серверным timestamps.
+        Если started не наблюдался, отдельные интервалы неизвестны. Для восстановленной
+        задачи измеряется только текущий сеанс ожидания. Timeout/отмена сохраняют task ID.
+        """
+        began, started, finished, outcome = monotonic(), None, None, "error"
         try:
             async with asyncio.timeout(self.settings.docling_task_timeout_seconds):
                 while True:
@@ -119,8 +146,13 @@ class DoclingTasks:
                     if self.task_id(data) != identifier:
                         raise IntakeError("docling_incomplete", "Docling вернул другую OCR-задачу")
                     status = data.get("task_status")
+                    if status == "started" and started is None:
+                        started = monotonic()
                     if status == "success":
-                        return await self._get(f"/v1/result/{identifier}", emit)
+                        finished = monotonic()
+                        result = await self._get(f"/v1/result/{identifier}", emit)
+                        outcome = "success"
+                        return result
                     if status not in {"pending", "started"}:
                         raise IntakeError(
                             "docling_incomplete", "Docling не завершил OCR-задачу успешно"
@@ -130,3 +162,26 @@ class DoclingTasks:
             raise IntakeError(
                 "docling_task_timeout", "Истёк срок ожидания OCR-задачи", 503
             ) from exc
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
+        finally:
+            ended = monotonic()
+            logging.getLogger("intake").info(
+                json.dumps(
+                    {
+                        "event": "ocr_task_timing",
+                        "task_ref": hashlib.sha256(identifier.encode()).hexdigest()[:16],
+                        "status": outcome,
+                        "resumed": resumed,
+                        "timing_source": "client_poll",
+                        "wait_ms": round((ended - began) * 1000, 2),
+                        "observed_queue_wait_ms": round((started - began) * 1000, 2)
+                        if started is not None and not resumed
+                        else None,
+                        "observed_execution_ms": round(((finished or ended) - started) * 1000, 2)
+                        if started is not None
+                        else None,
+                    }
+                )
+            )

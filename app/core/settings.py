@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     ] = Field(("iso:ru", "iso:en"), min_length=1, max_length=8)
     docling_timeout_seconds: int = Field(180, ge=1, le=600)
     docling_window_pages: int = Field(20, ge=1, le=50)
+    docling_window_concurrency: int = Field(2, ge=1, le=2)
     docling_max_request_mb: int = Field(45, ge=1, le=50)
     docling_async: bool = True
     docling_task_timeout_seconds: int = Field(600, ge=30, le=1800)

@@ -74,6 +74,25 @@ def test_docling_ocr_settings_reject_invalid_configuration(changes):
         Settings(_env_file=None, **changes)
 
 
+def test_docling_window_concurrency_defaults_and_layered_overrides(tmp_path, monkeypatch):
+    """Общий лимит окон читается Pydantic; env процесса имеет наивысший приоритет."""
+    monkeypatch.delenv("DOCLING_WINDOW_CONCURRENCY", raising=False)
+    assert Settings(_env_file=None).docling_window_concurrency == 2
+    catalog, private = tmp_path / ".env.example", tmp_path / ".env"
+    catalog.write_text("DOCLING_WINDOW_CONCURRENCY=2\n", "utf-8")
+    private.write_text("DOCLING_WINDOW_CONCURRENCY=1\n", "utf-8")
+    assert Settings(_env_file=(catalog, private)).docling_window_concurrency == 1
+    monkeypatch.setenv("DOCLING_WINDOW_CONCURRENCY", "2")
+    assert Settings(_env_file=(catalog, private)).docling_window_concurrency == 2
+
+
+@pytest.mark.parametrize("value", [0, -1, 3, 100])
+def test_docling_window_concurrency_is_bounded(value):
+    """Неверный лимит не позволяет случайно перегрузить два shared OCR worker."""
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, docling_window_concurrency=value)
+
+
 def test_bootstrap_is_atomic_sparse_and_never_overwrites(tmp_path):
     """Повторный bootstrap не меняет ни байта настоящего .env и создаёт разные ключи интеграций."""
     assert initialize_env(tmp_path)

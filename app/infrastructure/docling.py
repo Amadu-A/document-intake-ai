@@ -10,6 +10,7 @@ import sys
 import tempfile
 from pathlib import Path
 from time import monotonic
+from weakref import WeakValueDictionary
 
 import httpx
 import pymupdf
@@ -19,7 +20,7 @@ from app.core.observability import timed
 from app.domain.errors import IntakeError
 from app.domain.segmentation import windows
 from app.infrastructure.conversion import stop_process
-from app.infrastructure.docling_tasks import DoclingTasks, retry_delay
+from app.infrastructure.docling_tasks import DoclingTasks, persist_checkpoint, retry_delay
 
 
 def response_error(response: httpx.Response) -> IntakeError:
@@ -166,52 +167,60 @@ class DoclingOCR:
         self.settings, self.client = settings, client
         self._request_lock = asyncio.Lock()
         self._next_request_at = 0.0
+        self._window_slots = asyncio.Semaphore(settings.docling_window_concurrency)
+        self._window_locks: WeakValueDictionary[Path, asyncio.Lock] = WeakValueDictionary()
         self.tasks = DoclingTasks(settings, client)
+
+    async def _request_slot(self) -> None:
+        """Сериализует только частоту POST; общий Retry-After может продлить текущую паузу."""
+        async with self._request_lock:
+            # Ожидание подвижного deadline Retry-After, а не опрос состояния задачи.
+            while (delay := self._next_request_at - monotonic()) > 0:  # noqa: ASYNC110
+                await asyncio.sleep(delay)
+            self._next_request_at = monotonic() + self.settings.docling_request_interval_seconds
 
     async def _request(
         self, content: bytes, parameters: dict, pages: list[dict], emit: Emit
     ) -> httpx.Response:
-        """Сериализует OCR процесса; при перегрузке ограниченно повторяет запрос с паузой."""
-        async with self._request_lock:
-            fingerprint = [self._cache_key(p) for p in pages]
-            task_path = self.tasks.path(pages, fingerprint)
-            if self.settings.docling_async:
-                identifier = await asyncio.to_thread(self.tasks.load, task_path, fingerprint)
-                if identifier:
+        """Отправляет/восстанавливает окно; ожидание OCR не удерживает общий POST lock."""
+        fingerprint = [self._cache_key(p) for p in pages]
+        task_path = self.tasks.path(pages, fingerprint)
+        if self.settings.docling_async:
+            identifier = await asyncio.to_thread(self.tasks.load, task_path, fingerprint)
+            if identifier:
+                return await self.tasks.wait(identifier, emit, resumed=True)
+        for attempt in range(1, self.settings.docling_max_attempts + 1):
+            await self._request_slot()
+            response = await self.client.post(
+                self.settings.docling_base_url.rstrip("/")
+                + "/v1/convert/file"
+                + ("/async" if self.settings.docling_async else ""),
+                headers={"X-Api-Key": self.settings.docling_api_key.get_secret_value()},
+                files={"files": ("window.pdf", content, "application/pdf")},
+                data=parameters,
+                timeout=self.settings.docling_timeout_seconds,
+            )
+            if response.status_code not in {429, 502, 503, 504}:
+                if response.status_code == 200 and self.settings.docling_async:
+                    identifier = self.tasks.task_id(response.json())
+                    await persist_checkpoint(self.tasks.save, task_path, fingerprint, identifier)
                     return await self.tasks.wait(identifier, emit)
-            for attempt in range(1, self.settings.docling_max_attempts + 1):
-                await asyncio.sleep(max(0, self._next_request_at - monotonic()))
-                response = await self.client.post(
-                    self.settings.docling_base_url.rstrip("/")
-                    + "/v1/convert/file"
-                    + ("/async" if self.settings.docling_async else ""),
-                    headers={"X-Api-Key": self.settings.docling_api_key.get_secret_value()},
-                    files={"files": ("window.pdf", content, "application/pdf")},
-                    data=parameters,
-                    timeout=self.settings.docling_timeout_seconds,
-                )
-                self._next_request_at = monotonic() + self.settings.docling_request_interval_seconds
-                if response.status_code not in {429, 502, 503, 504}:
-                    if response.status_code == 200 and self.settings.docling_async:
-                        identifier = self.tasks.task_id(response.json())
-                        await asyncio.to_thread(self.tasks.save, task_path, fingerprint, identifier)
-                        return await self.tasks.wait(identifier, emit)
-                    return response
-                delay = retry_delay(response, attempt)
-                if attempt == self.settings.docling_max_attempts or (
-                    delay > self.settings.docling_retry_max_seconds
-                ):
-                    return response
-                # Слот остаётся занят: другие coroutine не обходят Retry-After параллельным POST.
-                self._next_request_at = max(self._next_request_at, monotonic() + delay)
-                await emit(
-                    "ocr_retry",
-                    {
-                        "attempt": attempt,
-                        "http_status": response.status_code,
-                        "retry_after_seconds": round(delay, 2),
-                    },
-                )
+                return response
+            delay = retry_delay(response, attempt)
+            if attempt == self.settings.docling_max_attempts or (
+                delay > self.settings.docling_retry_max_seconds
+            ):
+                return response
+            # Следующие POST всех окон соблюдают общий cooldown; уже принятые task ждут отдельно.
+            self._next_request_at = max(self._next_request_at, monotonic() + delay)
+            await emit(
+                "ocr_retry",
+                {
+                    "attempt": attempt,
+                    "http_status": response.status_code,
+                    "retry_after_seconds": round(delay, 2),
+                },
+            )
         raise AssertionError("Настройка DOCLING_MAX_ATTEMPTS должна быть положительной")
 
     def _cache_key(self, page: dict) -> dict:
@@ -322,7 +331,12 @@ class DoclingOCR:
 
     @timed("document_ocr")
     async def recognize(self, pages: list[dict], emit: Emit) -> list[dict]:
-        """Разбивает большой вход на OCR-окна и восстанавливает глобальные page identifiers."""
+        """Обрабатывает ограниченное число окон и возвращает страницы в исходном порядке.
+
+        Лимит общий для всех вызовов адаптера процесса; прогресс учитывает любое готовое
+        окно. При ошибке/отмене остальные coroutine отменяются и дожидаются завершения,
+        а готовые OCR/task checkpoints сохраняются для восстановления.
+        """
         if not self.settings.docling_api_key.get_secret_value():
             raise IntakeError("docling_unavailable", "Не настроен DOCLING_API_KEY проекта", 503)
         saved = {}
@@ -331,17 +345,45 @@ class DoclingOCR:
             if cached is not None:
                 saved[(page["file_id"], page["page_number"])] = cached
         await emit("ocr_progress", {"completed": len(saved), "total": len(pages)})
-        result = []
-        for chunk in windows(pages, self.settings.docling_window_pages):
-            missing = [p for p in chunk if (p["file_id"], p["page_number"]) not in saved]
-            if missing:
-                for page in await self._window(missing, emit):
-                    saved[(page["file_id"], page["page_number"])] = page
-                await emit("ocr_progress", {"completed": len(saved), "total": len(pages)})
-            result.extend(saved[(p["file_id"], p["page_number"])] for p in chunk)
-        return result
+        chunks = iter(windows(pages, self.settings.docling_window_pages))
+        progress_lock = asyncio.Lock()
+
+        async def consume() -> None:
+            """Берёт следующее окно; не создаёт тысячи ожидающих задач для больших пакетов."""
+            for chunk in chunks:
+                if all((p["file_id"], p["page_number"]) in saved for p in chunk):
+                    continue
+                async with self._window_slots:
+                    output = await self._window(chunk, emit)
+                async with progress_lock:
+                    saved.update(((p["file_id"], p["page_number"]), p) for p in output)
+                    await emit("ocr_progress", {"completed": len(saved), "total": len(pages)})
+
+        pending = [
+            asyncio.create_task(consume()) for _ in range(self.settings.docling_window_concurrency)
+        ]
+        try:
+            await asyncio.gather(*pending)
+        finally:
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+        return [saved[(p["file_id"], p["page_number"])] for p in pages]
 
     async def _window(self, pages: list[dict], emit: Emit) -> list[dict]:
+        """Защищает одно окно до записи кеша; дубликат вызова повторно читает готовые страницы."""
+        fingerprint = [self._cache_key(p) for p in pages]
+        key = self.tasks.path(pages, fingerprint)
+        lock = self._window_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            cached = [await asyncio.to_thread(self._cached, p) for p in pages]
+            if all(p is not None for p in cached):
+                return cached
+            # Не меняем состав pending окна из-за частично записанного кеша: иначе
+            # restart потеряет его task ID и создаст повторную конвертацию.
+            return await self._convert_window(pages, emit)
+
+    async def _convert_window(self, pages: list[dict], emit: Emit) -> list[dict]:
         """Уменьшает только технический размер OCR-запроса при превышении byte-лимита."""
         limit = self.settings.docling_max_request_mb * 1024 * 1024
 
@@ -402,7 +444,7 @@ class DoclingOCR:
                         if any(p.get("page_no") == number for p in item.get("prov", [])):
                             items.append({"kind": kind, **item})
                 raw = json.dumps(items, ensure_ascii=False)
-                await asyncio.to_thread(self._save_cache, page, raw)
+                await persist_checkpoint(self._save_cache, page, raw)
                 context = vision_context(items)
                 if len(context) > 20000:
                     await emit(
