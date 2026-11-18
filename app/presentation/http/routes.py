@@ -18,6 +18,7 @@ from app.domain.boundaries import ExcludedPage, ManualDocument, ManualPlan
 from app.domain.errors import IntakeError
 from app.domain.jobs import TERMINAL, utcnow
 from app.domain.schema import BatchResult
+from app.domain.segmentation import PageRef
 from app.presentation.http.dependencies import OptionalOwner, Owner, Services, authenticate
 from app.presentation.http.multipart import BoundedMultipartParser
 
@@ -80,8 +81,18 @@ class DraftBody(BaseModel):
     expected_revision: int = Field(ge=0)
     documents: list[ManualDocument] = Field(max_length=10000)
     excluded_pages: list[ExcludedPage] = Field(default_factory=list, max_length=10000)
+    page_order: list[PageRef] | None = Field(None, max_length=10000)
     action: Literal[
-        "edit", "split", "merge", "boundary_move", "exclude", "restore", "undo", "reset", "manual"
+        "edit",
+        "split",
+        "merge",
+        "boundary_move",
+        "page_move",
+        "exclude",
+        "restore",
+        "undo",
+        "reset",
+        "manual",
     ] = "edit"
 
 
@@ -202,7 +213,9 @@ async def change_mode(job_id: str, body: ModeBody, container: Services, owner: O
 @router.put("/jobs/{job_id}/segmentation")
 async def save_segmentation(job_id: str, body: DraftBody, container: Services, owner: Owner):
     """Сохраняет разметку и manual-режим одной серверной операцией."""
-    plan = ManualPlan(documents=body.documents, excluded_pages=body.excluded_pages)
+    plan = ManualPlan(
+        documents=body.documents, excluded_pages=body.excluded_pages, page_order=body.page_order
+    )
     job = await container.boundaries.save(job_id, owner, body.expected_revision, plan, body.action)
     return container.exports.segmentation(job)
 

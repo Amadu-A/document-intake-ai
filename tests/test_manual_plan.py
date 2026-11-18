@@ -105,3 +105,40 @@ def test_incomplete_preview_draft_cannot_be_approved():
             refs(),
             require_documents=True,
         )
+
+
+def test_explicit_operator_order_preserves_provenance_and_immutable_snapshot():
+    """Ручная перестановка между файлами разрешена только как полная явная последовательность."""
+    physical = refs(4) + refs(2, "source-b")
+    order = [physical[i] for i in [2, 5, 0, 1, 4, 3]]
+    plan = ManualPlan(
+        documents=[
+            ManualDocument(client_id="one", pages=order[:3]),
+            ManualDocument(client_id="two", pages=order[3:5]),
+        ],
+        excluded_pages=[ExcludedPage(**order[-1].model_dump())],
+        page_order=order,
+    )
+    validate_assignment(plan, physical)
+    approved = ApprovedPlan.from_draft(plan)
+    plan.page_order.reverse()
+    assert approved.page_order == tuple(order)
+    validate_assignment(approved, physical)
+
+
+@pytest.mark.parametrize("problem", ["duplicate", "missing", "unknown", "group_order"])
+def test_invalid_operator_order_cannot_hide_or_duplicate_pages(problem):
+    """Нельзя потерять лист, заменить адрес или игнорировать порядок внутри диапазона."""
+    physical = refs()
+    order = list(reversed(physical))
+    plan = ManualPlan(documents=[ManualDocument(client_id="one", pages=order)], page_order=order)
+    if problem == "duplicate":
+        plan.page_order[0] = plan.page_order[1]
+    elif problem == "missing":
+        plan.page_order.pop()
+    elif problem == "unknown":
+        plan.page_order[0] = PageRef(file_id="foreign", page_number=1)
+    else:
+        plan.documents[0].pages.reverse()
+    with pytest.raises(IntakeError):
+        validate_assignment(plan, physical)

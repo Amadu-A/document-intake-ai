@@ -17,6 +17,11 @@
     <label>Источник <select class="boundary__source" data-source-select aria-label="Выбрать исходный файл"><option value="">Все файлы</option></select></label>
     <label>Страница <input class="boundary__jump" data-page-jump type="number" min="1" value="1" aria-label="Перейти к сквозной странице"></label>
     <span data-page-counts>Страницы ещё не обнаружены</span>
+    <div class="boundary__page-tools" role="group" aria-label="Порядок страниц">
+      <button class="button button--compact" type="button" data-boundary-action="page-back" aria-label="Переместить выбранные страницы на одну позицию назад" disabled>← Лист назад</button>
+      <button class="button button--compact" type="button" data-boundary-action="page-forward" aria-label="Переместить выбранные страницы на одну позицию вперёд" disabled>Лист вперёд →</button>
+      <button class="button button--compact" type="button" data-boundary-action="page-move" disabled>Переместить…</button>
+    </div>
   </div>
   <div class="boundary__scroll" data-boundary-scroll tabindex="0" aria-label="Горизонтальная лента страниц">
     <div class="boundary__track" data-boundary-track></div>
@@ -26,3 +31,16 @@
   <p class="boundary__error" data-boundary-error role="alert" hidden></p>
   <p class="boundary__save" data-boundary-save role="status" aria-live="polite">Черновик ещё не создан</p>
 </section>
+<dialog class="modal boundary-move" data-page-move-dialog aria-labelledby="page-move-title">
+  <form data-page-move-form>
+    <div class="modal__heading"><h2 class="modal__title" id="page-move-title">Переместить страницы</h2><button class="button button--compact" type="button" data-page-move-close aria-label="Закрыть перенос страниц">✕</button></div>
+    <p class="modal__description" data-page-move-summary>Выбранные листы войдут в диапазон страницы назначения.</p>
+    <div class="boundary-move__fields">
+      <label for="page-move-side">Положение<select class="boundary__source" id="page-move-side" data-page-move-side><option value="after">После страницы</option><option value="before">Перед страницей</option></select></label>
+      <label for="page-move-target">Позиция в ленте<input class="boundary__jump" id="page-move-target" type="number" min="1" required data-page-move-target></label>
+    </div>
+    <p class="boundary__hint" data-page-move-destination aria-live="polite"></p>
+    <p class="boundary__error" data-page-move-error role="alert" hidden></p>
+    <div class="boundary-move__actions"><button class="button" type="button" data-page-move-close>Отмена</button><button class="button button--primary" type="submit" data-page-move-submit>Переместить</button></div>
+  </form>
+</dialog>

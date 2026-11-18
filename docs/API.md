@@ -94,7 +94,7 @@ SSE-события имеют возрастающий `id`. `text_delta` сод
 |---|---|
 | `GET /jobs/{id}/segmentation` | Flags, source, `plan_revision`, proposal/draft/approved, `can_confirm` |
 | `PATCH /jobs/{id}/mode` | JSON `{expected_revision, auto_split, skip_segmentation}` |
-| `PUT /jobs/{id}/segmentation` | JSON `{expected_revision, documents, excluded_pages, action?}` |
+| `PUT /jobs/{id}/segmentation` | JSON `{expected_revision, documents, excluded_pages, page_order?, action?}` |
 | `POST /jobs/{id}/segmentation/confirm` | JSON `{expected_revision}`, `202` со status |
 | `GET /jobs/{id}/pages?offset=0&limit=60` | Порция страниц, limit 1..120, ready/pending и URLs |
 | `GET /jobs/{id}/pages/{file_id}/{page}/thumbnail` | Небольшой PNG, тот же owner/signed access |
@@ -170,8 +170,31 @@ Status/snapshot и segmentation содержат `comparisons`:
 ручная правка по-прежнему включает skip. Разные источники автоматически не объединяются.
 
 В ручном составе несмежный список страниц допустим: группа [101,103] не включает лист 102. Порядок
-листов внутри PDF остаётся исходным. В UI Ctrl/Cmd выбирает отдельные листы,
+листов внутри PDF по умолчанию исходный. В UI Ctrl/Cmd выбирает отдельные листы,
 «Создать диапазон» переносит выбранные страницы из прежних групп в новую.
+
+`page_order` — необязательный полный список PageRef в операторском порядке;
+`null`/отсутствие означает исходную последовательность. Если список задан, он содержит
+каждую страницу пакета ровно один раз, включая `excluded_pages`. Потери, дубли и
+чужие адреса дают `422 invalid_page_order`. `documents[].pages` и сами documents
+должны следовать этому порядку; все прежние проверки покрытия/лимитов сохраняются.
+У PUT есть действие аудита `action="page_move"`. Только явное сохранение ручного
+плана разрешает перестановку; автоматическое разделение не меняет исходную последовательность.
+До готовности всех превью новый порядок отклоняется с `409 preview_not_ready`,
+после confirm — с `409 plan_locked`; owner, TTL и optimistic revision проверяются как прежде.
+
+GET segmentation возвращает `page_order` в draft/approved/initial планах.
+После перестановки интеграция передаёт его при последующих правках всего плана.
+При confirm список копируется в immutable snapshot. PDF-комплект, manifest и
+`documents[].pages` JSON 1.0 следуют выбранному порядку; номера остаются физическими
+и могут убывать. Исходный файл не переписывается.
+Каталог GET pages и его `offset/global_position` сохраняют первоначальный порядок;
+для нового представления используйте `page_order` и ссылки по PageRef. Это исключает
+подмену превью при переносе страницы через границу порций по 60 элементов.
+
+Поворот большого web-превью — настройка просмотра вкладки по PageRef; он не меняет
+серверную ревизию/план, OCR, JSON, оригинал или PDF-комплект. В sessionStorage
+сохраняются только job ID/PageRef/углы; изображения и OCR туда не записываются.
 
 Минутные HTTP-бюджеты независимы: команды RATE_LIMIT_PER_MINUTE=120,
 чтение READ_RATE_LIMIT_PER_MINUTE=600, preview/thumbnail PREVIEW_RATE_LIMIT_PER_MINUTE=2400.

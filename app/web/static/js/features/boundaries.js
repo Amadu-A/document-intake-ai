@@ -2,12 +2,12 @@
 /** Редактор с серверным ACK/revision, ограниченным DOM и ленивой загрузкой превью. */
 import { api, notice } from "../api.js";
 import { previewURL, clearPreviews } from "../previews.js";
-import { pageKey, sourceLabel, groupFor, splitRange, mergeRanges, excludePages, createRange, moveBoundary, coversPages } from "./boundary_state.js";
+import { pageKey, sourceLabel, groupFor, splitRange, mergeRanges, excludePages, createRange, moveBoundary, coversPages, orderedPages, movePages } from "./boundary_state.js";
 import { modeFlags, modeFromFlags } from "./modes.js";
 
 export function createBoundaryEditor(viewer, changed, controlsChanged = () => {}) {
   /** Хранит метаданные; изображения и URL запрашивает порциями по 60 страниц. */
-  let snapshot = null, saved = null, savedStatus = null, plan = null, physical = [], filtered = [], selected = new Set(), anchor = 0;
+  let snapshot = null, saved = null, savedStatus = null, plan = null, original = [], physical = [], filtered = [], selected = new Set(), anchor = 0;
   let busy = false, history = [], generation = 0, editing = null, lastJob = null;
   let activePageKey = null, controller = new AbortController(), dragCleanup = () => {};
   const cache = new Map(), requests = new Map();
@@ -17,6 +17,8 @@ export function createBoundaryEditor(viewer, changed, controlsChanged = () => {}
   const saveLabel = document.querySelector("[data-boundary-save]"), confirm = document.querySelector("[data-confirm-plan]");
   const sourceSelect = document.querySelector("[data-source-select]");
   const errorLabel = document.querySelector("[data-boundary-error]");
+  const moveDialog = document.querySelector("[data-page-move-dialog]"), moveTarget = document.querySelector("[data-page-move-target]"), moveError = document.querySelector("[data-page-move-error]");
+  let moveRevision = null;
   const endpoint = () => `/api/v1/jobs/${snapshot.job_id}`;
   function flags() { /** Читает единственное выбранное значение радиогруппы. */ return modeFlags(modes.find(control => control.checked).value); }
   function selectMode(mode) { /** Серверный ACK восстанавливает одно выбранное значение. */ for (const control of modes) control.checked = control.value === mode; }
@@ -25,7 +27,7 @@ export function createBoundaryEditor(viewer, changed, controlsChanged = () => {}
     if (!snapshot) return null;
     const key = pageKey(ref), stored = cache.get(key);
     if (stored && Date.now() - stored.time < (stored.page.render_status === "ready" ? 60000 : 1200)) return stored.page;
-    const position = physical.findIndex(p => pageKey(p) === key), offset = Math.floor(position / 60) * 60;
+    const position = original.findIndex(p => pageKey(p) === key), offset = Math.floor(position / 60) * 60;
     if (position < 0) return null;
     const requestKey = `${generation}:${offset}`, ownGeneration = generation;
     if (!requests.has(requestKey)) requests.set(requestKey, api(`${endpoint()}/pages?offset=${offset}&limit=60`, { signal: controller.signal }).then(data => {
@@ -54,7 +56,13 @@ export function createBoundaryEditor(viewer, changed, controlsChanged = () => {}
     /** Подтверждение доступно для полностью сохранённого и покрытого плана. */
     const locked = !snapshot || snapshot.plan_locked || ["failed", "cancelled", "completed", "completed_with_warnings", "expired"].includes(snapshot.status) || (snapshot.expires_at && Date.parse(snapshot.expires_at) <= Date.now());
     for (const control of modes) control.disabled = busy || locked && !!snapshot;
-    for (const button of document.querySelectorAll("[data-boundary-action]")) button.disabled = busy || locked || !physical.length || (button.dataset.boundaryAction === "undo" && !history.length);
+    const chosen = physical.map((p, i) => selected.has(pageKey(p)) ? i : -1).filter(i => i >= 0);
+    for (const button of document.querySelectorAll("[data-boundary-action]")) {
+      const action = button.dataset.boundaryAction, pageAction = action.startsWith("page-");
+      button.disabled = busy || locked || !physical.length || (action === "undo" && !history.length) || pageAction && (!snapshot?.preview_complete || !!editing || !chosen.length || (action === "page-back" && chosen[0] === 0) || (action === "page-forward" && chosen.at(-1) === physical.length - 1) || (action === "page-move" && chosen.length === physical.length));
+    }
+    document.querySelector("[data-page-move-submit]").disabled = busy || locked || !snapshot?.preview_complete;
+    if (locked && moveDialog.open) moveDialog.close();
     confirm.disabled = locked || busy || !!editing || !saved?.can_confirm || !coversPages(plan, physical) || !plan.documents.length;
     controlsChanged();
   }
@@ -155,7 +163,38 @@ export function createBoundaryEditor(viewer, changed, controlsChanged = () => {}
     if (action === "boundary_move" && next.excluded_pages.some(p => !previousExclusions.has(pageKey(p))) && !window.confirm("Сдвиг оставит страницы вне диапазонов. Исключить их из PDF-комплектов, сохранив оригиналы и превью?")) { plan = before; editing = null; render(); savedMessage(); return; }
     const response = await mutate("/segmentation", "PUT", { ...next, action });
     if (response && action !== "undo") history.push(before); controls();
+    return response;
   }
+  function destinationHint() {
+    /** Номер в диалоге относится к текущей ленте; исходный адрес и диапазон показываются рядом. */
+    const ref = physical[Number(moveTarget.value) - 1], group = ref && groupFor(plan, ref);
+    const source = ref && snapshot.sources.find(s => s.file_id === ref.file_id);
+    document.querySelector("[data-page-move-destination]").textContent = ref ? `${source?.file_name || "Источник"} · исходная стр. ${ref.page_number} · ${group ? "Документ " + (plan.documents.indexOf(group) + 1) : "Вне диапазона"}` : "Укажите существующую позицию в ленте";
+  }
+  function openMove() {
+    /** Перенос на любую позицию доступен с клавиатуры, без долгого горизонтального drag. */
+    const chosen = physical.filter(p => selected.has(pageKey(p)));
+    if (!chosen.length) throw new Error("Выберите страницы для переноса");
+    const last = physical.findIndex(p => pageKey(p) === pageKey(chosen.at(-1)));
+    const target = physical.findIndex((p, i) => i > last && !selected.has(pageKey(p)));
+    moveTarget.max = physical.length; moveTarget.value = target >= 0 ? target + 1 : physical.findIndex(p => !selected.has(pageKey(p))) + 1;
+    document.querySelector("[data-page-move-summary]").textContent = `Выбрано страниц: ${chosen.length}. Они войдут в диапазон страницы назначения в показанном порядке. Исходные номера сохраняются.`;
+    moveRevision = saved.plan_revision; moveError.hidden = true; destinationHint(); moveDialog.showModal(); moveTarget.focus(); moveTarget.select();
+  }
+  document.querySelectorAll("[data-page-move-close]").forEach(button => button.addEventListener("click", () => moveDialog.close()));
+  moveTarget.addEventListener("input", destinationHint);
+  document.querySelector("[data-page-move-form]").addEventListener("submit", async event => {
+    event.preventDefault(); if (busy || !plan) return;
+    try {
+      if (!saved || saved.plan_revision !== moveRevision) throw new Error("Разметка изменилась. Закройте окно и выберите назначение заново.");
+      const target = physical[Number(moveTarget.value) - 1];
+      if (!target) throw new Error("Укажите существующую позицию в ленте");
+      const chosen = physical.filter(p => selected.has(pageKey(p)));
+      const response = await save(movePages(plan, chosen, target, document.querySelector("[data-page-move-side]").value, physical), "page_move");
+      if (response && moveDialog.open) moveDialog.close();
+      else if (moveDialog.open) { moveError.textContent = errorLabel.textContent || "Перенос не сохранён. Проверьте соединение и текущую редакцию."; moveError.hidden = false; }
+    } catch (error) { moveError.textContent = error.message; moveError.hidden = false; }
+  });
   for (const control of modes) control.addEventListener("change", async () => {
     if (snapshot) {
       if (saved?.segmentation_source.startsWith("manual") && !window.confirm("Сменить режим и восстановить исходный состав? Текущий ручной черновик будет заменён.")) { selectMode(modeFromFlags(saved)); return; }
@@ -168,6 +207,13 @@ export function createBoundaryEditor(viewer, changed, controlsChanged = () => {}
     const chosen = physical.filter(p => selected.has(pageKey(p))), ref = chosen[0] || physical[0], action = button.dataset.boundaryAction;
     try {
       if (action === "manual") await save(plan, "manual");
+      if (action === "page-move") openMove();
+      if (["page-back", "page-forward"].includes(action)) {
+        const at = physical.findIndex(p => pageKey(p) === pageKey(action === "page-back" ? chosen[0] : chosen.at(-1)));
+        const target = physical[at + (action === "page-back" ? -1 : 1)];
+        if (!target) throw new Error("Страница уже находится у края пакета");
+        await save(movePages(plan, chosen, target, action === "page-back" ? "before" : "after", physical), "page_move");
+      }
       if (action === "split") await save(splitRange(plan, ref, physical), "split");
       if (action === "merge") await save(mergeRanges(plan, ref, physical), "merge");
       if (action === "exclude" && chosen.length && window.confirm(`Исключить ${chosen.length} стр. из регистрационных PDF? Оригиналы и превью сохранятся. Пустота страниц автоматически не определялась.`)) await save(excludePages(plan, chosen), "exclude");
@@ -188,7 +234,8 @@ export function createBoundaryEditor(viewer, changed, controlsChanged = () => {}
       /** Отзывает запросы/жесты и удаляет все данные прежнего пакета. */
       generation++; controller.abort(); controller = new AbortController(); dragCleanup();
       snapshot = saved = savedStatus = plan = editing = lastJob = activePageKey = null;
-      physical = []; filtered = []; history = []; selected.clear(); cache.clear(); requests.clear(); finalRoles.clear(); busy = false; anchor = 0;
+      original = []; physical = []; filtered = []; history = []; selected.clear(); cache.clear(); requests.clear(); finalRoles.clear(); busy = false; anchor = 0;
+      if (moveDialog.open) moveDialog.close(); moveRevision = null;
       clearPreviews(); track.replaceChildren(); scroll.scrollLeft = 0;
       sourceSelect.replaceChildren(new Option("Все файлы", "")); selectMode("review");
       errorLabel.hidden = true; errorLabel.textContent = "";
@@ -213,15 +260,21 @@ export function createBoundaryEditor(viewer, changed, controlsChanged = () => {}
       if (lastJob !== data.job_id) { generation++; controller.abort(); controller = new AbortController(); lastJob = data.job_id; clearPreviews(); cache.clear(); finalRoles.clear(); history = []; saved = null; selected.clear(); scroll.scrollLeft = 0; errorLabel.hidden = true; }
       const own = generation;
       snapshot = data;
-      physical = data.sources.flatMap(source => Array.from({ length: source.page_count || 0 }, (_, i) => ({ file_id: source.file_id, page_number: i + 1 })));
+      const previousOrder = physical.map(pageKey).join("|");
+      original = data.sources.flatMap(source => Array.from({ length: source.page_count || 0 }, (_, i) => ({ file_id: source.file_id, page_number: i + 1 })));
       if (!saved || saved.plan_revision !== data.plan_revision || saved.locked !== data.plan_locked || saved.preview_complete !== data.preview_complete || savedStatus !== data.status) {
         const response = await api(`${endpoint()}/segmentation`, { signal: controller.signal });
         if (own !== generation) return null;
         saved = response; savedStatus = data.status; plan = saved.draft_plan || { documents: [], excluded_pages: [] }; editing = null;
       }
+      physical = orderedPages(plan, original);
       selectMode(modeFromFlags(saved));
       const previousSource = sourceSelect.value; sourceSelect.replaceChildren(new Option("Все файлы", ""));
       for (const source of data.sources) sourceSelect.add(new Option(source.file_name, source.file_id)); sourceSelect.value = previousSource;
+      if (previousOrder && previousOrder !== physical.map(pageKey).join("|") && activePageKey) {
+        const position = physical.findIndex(p => pageKey(p) === activePageKey);
+        if (position >= 0) { sourceSelect.value = ""; scroll.scrollLeft = Math.max(0, position * 108 - scroll.clientWidth / 2); anchor = position; document.querySelector("[data-page-jump]").value = position + 1; }
+      }
       document.querySelector("[data-page-counts]").textContent = `Превью ${data.pages_ready}/${data.pages_total} · в диапазонах ${saved.assigned_count} · исключено ${saved.excluded_count} · свободно ${saved.unassigned_count}`;
       document.querySelector("[data-page-jump]").max = physical.length || 1;
       document.querySelector("[data-boundary-status]").textContent = data.preview_complete ? saved.segmentation_source === "source_files" && !saved.skip_segmentation ? `Загружено файлов: ${data.sources.length} · ${data.pages_total} страниц. Границы ещё не определены` : `${saved.document_count} диапазонов · ${data.pages_total} страниц · ${sourceLabel(saved.segmentation_source)}` : `Подготовка превью: ${data.pages_ready}/${data.pages_total || "…"}. Готовые страницы уже доступны для разметки.`;

@@ -126,6 +126,12 @@ class BoundaryTransactions:
         async with self._transaction() as session:
             row, job = await self._locked(session, job_id)
             self._editable(job, owner, revision)
+            if plan.page_order is not None and not job.preview_complete:
+                raise IntakeError(
+                    "preview_not_ready",
+                    "Перенос страниц доступен после подготовки всех превью",
+                    409,
+                )
             validate_assignment(
                 plan,
                 job.page_refs(),

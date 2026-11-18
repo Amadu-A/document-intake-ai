@@ -13,6 +13,39 @@ export function groupFor(plan, ref) {
   return plan?.documents.find(d => d.pages.some(p => pageKey(p) === pageKey(ref)));
 }
 
+export function orderedPages(plan, original) {
+  /** Дополняет показ новыми превью; исходные физические адреса не перенумеровываются. */
+  const available = new Map(original.map(p => [pageKey(p), p])), seen = new Set(), result = [];
+  for (const ref of [...(plan?.page_order || []), ...original]) {
+    const key = pageKey(ref);
+    if (available.has(key) && !seen.has(key)) { result.push(available.get(key)); seen.add(key); }
+  }
+  return result;
+}
+
+export function movePages(plan, selected, target, side, physical) {
+  /** Переносит выбранные листы к цели и в её диапазон; сохраняет порядок выбранных и provenance. */
+  const next = structuredClone(plan), chosen = new Set(selected.map(pageKey)), targetKey = pageKey(target);
+  const moving = physical.filter(p => chosen.has(pageKey(p)));
+  if (!moving.length || moving.length !== chosen.size) throw new Error("Выберите существующие страницы для переноса");
+  if (chosen.has(targetKey)) throw new Error("Страница назначения входит в переносимые страницы");
+  if (!["before", "after"].includes(side)) throw new Error("Выберите положение перед или после страницы");
+  const destination = groupFor(next, target);
+  if (!destination) throw new Error("Страница назначения должна входить в диапазон");
+  const rest = physical.filter(p => !chosen.has(pageKey(p))), at = rest.findIndex(p => pageKey(p) === targetKey);
+  if (at < 0) throw new Error("Страница назначения не найдена");
+  rest.splice(at + (side === "after" ? 1 : 0), 0, ...moving);
+  next.page_order = rest.map(p => ({ file_id: p.file_id, page_number: p.page_number }));
+  const order = new Map(rest.map((p, i) => [pageKey(p), i]));
+  for (const doc of next.documents) doc.pages = doc.pages.filter(p => !chosen.has(pageKey(p)));
+  destination.pages.push(...moving.map(p => ({ file_id: p.file_id, page_number: p.page_number })));
+  next.documents = next.documents.filter(d => d.pages.length);
+  for (const doc of next.documents) doc.pages.sort((a, b) => order.get(pageKey(a)) - order.get(pageKey(b)));
+  next.documents.sort((a, b) => order.get(pageKey(a.pages[0])) - order.get(pageKey(b.pages[0])));
+  next.excluded_pages = next.excluded_pages.filter(p => !chosen.has(pageKey(p)));
+  return next;
+}
+
 export function splitRange(plan, ref, physical) {
   /** Делит после выбранной страницы; обе получившиеся группы обязаны быть непустыми. */
   const next = structuredClone(plan), group = groupFor(next, ref);

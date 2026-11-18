@@ -47,6 +47,7 @@ class ManualPlan(StrictModel):
 
     documents: list[ManualDocument] = Field(default_factory=list, max_length=10000)
     excluded_pages: list[ExcludedPage] = Field(default_factory=list, max_length=10000)
+    page_order: list[PageRef] | None = Field(None, max_length=10000)
 
 
 class ApprovedDocument(StrictModel):
@@ -63,6 +64,7 @@ class ApprovedPlan(StrictModel):
     model_config = {"frozen": True, "extra": "forbid"}
     documents: tuple[ApprovedDocument, ...]
     excluded_pages: tuple[ExcludedPage, ...]
+    page_order: tuple[PageRef, ...] | None = None
 
     @classmethod
     def from_draft(cls, draft: ManualPlan) -> "ApprovedPlan":
@@ -73,6 +75,7 @@ class ApprovedPlan(StrictModel):
                 for d in draft.documents
             ),
             excluded_pages=tuple(draft.excluded_pages),
+            page_order=tuple(draft.page_order) if draft.page_order is not None else None,
         )
 
 
@@ -105,8 +108,15 @@ def validate_assignment(
     complete: bool = True,
     require_documents: bool = False,
 ) -> None:
-    """Проверяет только адреса, непересечение, исходный порядок и явный учёт исключений."""
-    positions = {page: index for index, page in enumerate(physical_pages)}
+    """Проверяет покрытие и порядок: исходный либо явно заданную оператором перестановку."""
+    order = plan.page_order if plan.page_order is not None else physical_pages
+    if Counter(order) != Counter(physical_pages):
+        raise IntakeError(
+            "invalid_page_order",
+            "Порядок должен содержать каждую исходную страницу ровно один раз",
+            422,
+        )
+    positions = {page: index for index, page in enumerate(order)}
     assigned = [page for document in plan.documents for page in document.pages]
     excluded = [PageRef(file_id=p.file_id, page_number=p.page_number) for p in plan.excluded_pages]
     if len({d.client_id for d in plan.documents}) != len(plan.documents):
@@ -130,7 +140,7 @@ def validate_assignment(
     for document in plan.documents:
         indices = [positions[p] for p in document.pages]
         if indices != sorted(indices):
-            raise IntakeError("invalid_page_assignment", "Нарушен исходный порядок страниц")
+            raise IntakeError("invalid_page_assignment", "Страницы не соответствуют порядку плана")
         starts.append(indices[0])
     if starts != sorted(starts):
         raise IntakeError("invalid_page_assignment", "Нарушен порядок регистрационных диапазонов")
