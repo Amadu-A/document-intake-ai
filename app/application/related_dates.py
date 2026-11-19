@@ -7,6 +7,7 @@ from typing import Protocol, TypeVar
 from app.application.ports import Emit
 from app.domain.errors import IntakeError
 from app.domain.extraction import ExtractionDraft
+from app.domain.extractions import DetailedExtraction, Evidence
 from app.domain.related_dates import (
     RelatedDatesReading,
     RelatedDateSummary,
@@ -135,6 +136,23 @@ async def review_court_dates(
             target = result.requisites.related_entities.court_cases[entry.index]
             changed |= target.date != entry.date
             target.date = entry.date
+            if isinstance(result, DetailedExtraction):
+                path = f"requisites.related_entities.court_cases.{entry.index}.date"
+                result.field_evidence.pop(path, None)
+                if entry.source_page:
+                    result.field_evidence[path] = [
+                        Evidence(
+                            **entry.source_page.model_dump(),
+                            raw=entry.date_literal or (entry.source_quote or "")[:500] or None,
+                            status="found"
+                            if entry.readability == "legible"
+                            else "ambiguous"
+                            if entry.readability == "ambiguous"
+                            else "not_present",
+                            source="image",
+                            confidence=None,
+                        )
+                    ]
             result.warnings.extend(entry.warnings)
             if entry.readability == "ambiguous":
                 result.recognition.low_confidence_fields.append(

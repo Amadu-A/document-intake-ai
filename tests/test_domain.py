@@ -100,12 +100,16 @@ def test_unknown_direction_accepts_only_closed_partial_classification():
         ("Исходящее письмо Взлет-МСК", None),
     ],
 )
-def test_unknown_direction_rejects_invented_names_and_unlinked_subkind(kind, subkind):
-    """Пустой template_path не обходится сокращённым видом, чужим подвидом или смешением уровней."""
+def test_unknown_direction_keeps_factual_kind_outside_template_catalog(kind, subkind):
+    """Фактический вид/подвид отделён от пути каталога; пустая строка не заменяет null."""
     value = facts()["classification"]
     value.update(document_kind=kind, document_subkind=subkind)
-    with pytest.raises(ValidationError):
-        Classification.model_validate(value)
+    if kind == "":
+        with pytest.raises(ValidationError):
+            Classification.model_validate(value)
+    else:
+        parsed = Classification.model_validate(value)
+        assert parsed.document_kind == kind and parsed.document_subkind == subkind
 
 
 def test_nonletter_still_accepts_preliminary_kind_outside_letter_catalog():

@@ -12,8 +12,10 @@ from app.domain.boundaries import (
     validate_assignment,
 )
 from app.domain.comparisons import ALGORITHM_VERSION, adjacent_comparisons
+from app.domain.document_kinds import kind_metadata
 from app.domain.document_names import document_archive_name
 from app.domain.errors import IntakeError
+from app.domain.extractions import DetailedDocument, DetailedFacts, DetailedResult
 from app.domain.jobs import TERMINAL, Job, utcnow
 from app.domain.schema import BatchResult
 
@@ -76,7 +78,8 @@ class Exports:
 
     def signed(self, job: Job, path: str) -> str:
         """Активному заданию выдаёт короткую ссылку; terminal-ссылку ограничивает итоговым TTL."""
-        expires = job.expires_at or utcnow() + timedelta(minutes=5)
+        short = utcnow() + timedelta(minutes=5)
+        expires = min(job.expires_at, short) if job.expires_at else short
         return self.capabilities.sign(path, job.owner, expires)
 
     def segmentation(self, job: Job) -> dict:
@@ -257,6 +260,7 @@ class Exports:
             "links": {
                 "status": f"/api/v1/jobs/{job.id}",
                 "result": f"/api/v1/jobs/{job.id}/result",
+                "extractions": f"/api/v1/jobs/{job.id}/extractions",
                 "events": f"/api/v1/jobs/{job.id}/events",
                 "pages": f"/api/v1/jobs/{job.id}/pages",
                 "segmentation": f"/api/v1/jobs/{job.id}/segmentation",
@@ -305,6 +309,70 @@ class Exports:
                     job, self.document_path(job.id, document["document_id"])
                 )
         return BatchResult.model_validate(result).model_dump(mode="json")
+
+    async def extractions(self, job_id: str, owner: str) -> DetailedResult:
+        """Выдаёт только реально сохранённый v2; старые результаты v1 не конвертируются молча."""
+        legacy = await self.result(job_id, owner)
+        job = await self.intake.get(job_id, owner)
+        documents = []
+        for document in sorted(
+            (d for f in legacy["files"] for d in f["documents"]), key=lambda d: d["segment_index"]
+        ):
+            checkpoint = job.document_results.get(str(document["segment_index"]))
+            if (
+                not checkpoint
+                or checkpoint.extraction_schema_version != "2.0"
+                or not isinstance(checkpoint.facts, DetailedFacts)
+            ):
+                raise IntakeError(
+                    "extractions_unavailable",
+                    "Задание создано старой версией; JSON 1.0 доступен",
+                    409,
+                )
+            facts = checkpoint.facts
+            name, path = kind_metadata(facts.kind_code)
+            documents.append(
+                DetailedDocument(
+                    document_id=document["document_id"],
+                    segment_index=document["segment_index"],
+                    source_pages=checkpoint.group.pages,
+                    classification=facts.classification,
+                    kind_code=facts.kind_code,
+                    kind_name=name,
+                    kind_path=path,
+                    requisites=facts.requisites,
+                    details=facts.details,
+                    field_evidence=facts.field_evidence,
+                    one_c=facts.one_c,
+                    recognition=facts.recognition,
+                    warnings=facts.warnings,
+                    attachment_file=document["attachment_file"],
+                )
+            )
+        return DetailedResult(batch_id=job.id, documents=documents)
+
+    async def list_jobs(self, owner: str, offset: int, limit: int) -> dict:
+        """Список содержит только безопасную сводку, без OCR, путей, prompts или чужих totals."""
+        jobs = await self.intake.list_jobs(owner, offset, min(limit + 1, 100))
+        return {
+            "jobs": [
+                {
+                    "job_id": job.id,
+                    "status": job.status,
+                    "stage": job.stage,
+                    "created_at": job.created_at,
+                    "completed_at": job.completed_at,
+                    "expires_at": job.expires_at,
+                    "plan_revision": job.plan_revision,
+                    "files": [source.file_name for source in job.sources],
+                    "document_count": len(job.draft_plan.documents) if job.draft_plan else 0,
+                }
+                for job in jobs[:limit]
+            ],
+            "offset": offset,
+            "limit": limit,
+            "has_more": len(jobs) > limit,
+        }
 
     async def artifact(
         self,

@@ -2,6 +2,7 @@
 """Несекретные генераторы и явно тестовые doubles внешних OCR/VLM/AMQP."""
 
 from collections import deque
+from copy import deepcopy
 from types import SimpleNamespace
 
 import pymupdf
@@ -93,12 +94,13 @@ class ScriptedVision:
             raw = next(
                 (v for v in self.answers if isinstance(v, dict) and "classification" in v), facts()
             )
-            if not raw["classification"]["is_letter"] and self.answers and self.answers[0] is raw:
-                self.answers.popleft()
             return {
                 "classification": raw["classification"],
                 "continuation_summary": raw["requisites"]["summary"],
                 "warnings": raw["warnings"],
+                "kind_code": raw.get("kind_code"),
+                "our_role": raw.get("our_role"),
+                "role_evidence": raw.get("role_evidence"),
             }
         if schema.get("title") == "RelatedDatesReading" and (
             not self.answers
@@ -156,13 +158,108 @@ class ScriptedVision:
             value = answer(context) if callable(answer) else answer
             if "primary_readability" in schema.get("properties", {}) and isinstance(value, dict):
                 value = self.readability(value)
+            if (
+                schema.get("title") == "DetailedExtraction"
+                and isinstance(value, dict)
+                and "requisites" in value
+                and "classification" in value
+            ):
+                value = self.detailed(value, context)
             return value
         value = facts()
+        if context.get("selected_classification"):
+            value["classification"] = context["selected_classification"]
+        if schema.get("title") == "DetailedExtraction":
+            value = self.detailed(value, context)
         return (
             self.readability(value)
             if "primary_readability" in schema.get("properties", {})
             else value
         )
+
+    @staticmethod
+    def detailed(value, context):
+        """Дополняет только synthetic ответы v2 по заданному профилю; явные ошибки не исправляет."""
+        value = deepcopy(value)
+        for amount in value["requisites"].get("amounts", []):
+            if isinstance(amount.get("value"), (int, float)):
+                amount["value"] = str(amount["value"])
+        for item in value["requisites"].get("items", []):
+            for key in ("quantity", "price", "amount"):
+                if isinstance(item.get(key), (int, float)):
+                    item[key] = str(item[key])
+        value.setdefault("kind_code", context.get("selected_kind_code"))
+        if "details" not in value:
+            code = value["kind_code"]
+            value["details"] = {"profile": code} if code else None
+            if code == "D03":
+                value["details"].update(
+                    primary_document_type=value["classification"]["document_kind"],
+                    primary_document_role="payment_request"
+                    if value["classification"]["document_kind"] == "Счёт на оплату"
+                    else "primary",
+                )
+        provided_evidence = "field_evidence" in value
+        value.setdefault("field_evidence", {})
+        refs = context.get("pages", [])
+        if not refs:
+            refs = [p for item in context.get("window_evidence", []) for p in item.get("pages", [])]
+        if not refs:
+            refs = [
+                record
+                for item in context.get("window_evidence", [])
+                for records in item.get("facts", {}).get("field_evidence", {}).values()
+                for record in records
+            ]
+        if refs and not provided_evidence:
+
+            def prove(node, path):
+                """Добавляет provenance только к synthetic v1-ответам тестового адаптера."""
+                if isinstance(node, dict):
+                    for key, child in node.items():
+                        if key != "profile":
+                            prove(child, path + "." + key)
+                elif isinstance(node, list):
+                    for index, child in enumerate(node):
+                        prove(child, path + "." + str(index))
+                elif node is not None and ".page_range." not in path:
+                    value["field_evidence"].setdefault(
+                        path,
+                        [
+                            {
+                                "file_id": refs[0]["file_id"],
+                                "page_number": refs[0]["page_number"],
+                                "raw": str(node),
+                                "status": "found",
+                                "source": "image",
+                                "confidence": None,
+                            }
+                        ],
+                    )
+
+            prove(value["requisites"], "requisites")
+            if value.get("details"):
+                prove(value["details"], "details")
+            for path, fact in (
+                ("requisites.document_number", value["requisites"].get("document_number")),
+                ("requisites.document_date", value["requisites"].get("document_date")),
+                ("classification.document_kind", value["classification"].get("document_kind")),
+            ):
+                if fact is not None:
+                    value["field_evidence"].setdefault(
+                        path,
+                        [
+                            {
+                                "file_id": refs[0]["file_id"],
+                                "page_number": refs[0]["page_number"],
+                                "raw": str(fact),
+                                "status": "found",
+                                "source": "image",
+                                "confidence": None,
+                            }
+                        ],
+                    )
+        return value
 
     @staticmethod
     def readability(value):

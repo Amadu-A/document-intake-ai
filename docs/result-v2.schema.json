@@ -1,0 +1,1877 @@
+{
+  "$defs": {
+    "Alternative": {
+      "additionalProperties": false,
+      "description": "Сохраняет только допустимый альтернативный путь классификации.",
+      "properties": {
+        "template_path": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Template Path",
+          "type": "array"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        }
+      },
+      "required": [
+        "template_path"
+      ],
+      "title": "Alternative",
+      "type": "object"
+    },
+    "AmendmentDetails": {
+      "additionalProperties": false,
+      "description": "Предмет и начало действия изменения договора.",
+      "properties": {
+        "profile": {
+          "const": "D09",
+          "title": "Profile",
+          "type": "string"
+        },
+        "parent_contract": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContractReference"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "change_subject": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Change Subject"
+        },
+        "effective_date": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effective Date"
+        },
+        "total_amount": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total Amount"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "title": "AmendmentDetails",
+      "type": "object"
+    },
+    "AppendixDetails": {
+      "additionalProperties": false,
+      "description": "Самостоятельное утверждённое приложение к договору.",
+      "properties": {
+        "profile": {
+          "const": "D11",
+          "title": "Profile",
+          "type": "string"
+        },
+        "parent_contract": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContractReference"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "attachment_subject": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attachment Subject"
+        },
+        "total_amount": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total Amount"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "title": "AppendixDetails",
+      "type": "object"
+    },
+    "Attachment": {
+      "additionalProperties": false,
+      "description": "Приложение к регистрации; пустой page_range означает только упоминание.",
+      "properties": {
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "page_range": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Page Range",
+          "type": "array"
+        },
+        "document_kind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Document Kind"
+        },
+        "document_root": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DocumentRoot"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "Attachment",
+      "type": "object"
+    },
+    "AttachmentFile": {
+      "additionalProperties": false,
+      "description": "Реальный скачиваемый PDF-комплект для одной регистрации.",
+      "properties": {
+        "file_name": {
+          "title": "File Name",
+          "type": "string"
+        },
+        "file_url": {
+          "title": "File Url",
+          "type": "string"
+        },
+        "mime_type": {
+          "const": "application/pdf",
+          "default": "application/pdf",
+          "title": "Mime Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file_name",
+        "file_url"
+      ],
+      "title": "AttachmentFile",
+      "type": "object"
+    },
+    "Classification": {
+      "additionalProperties": false,
+      "description": "Проверяет род, направление и полный путь до конечного шаблона письма.",
+      "properties": {
+        "document_root": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DocumentRoot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "direction": {
+          "anyOf": [
+            {
+              "enum": [
+                "incoming",
+                "outgoing"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Direction"
+        },
+        "is_letter": {
+          "title": "Is Letter",
+          "type": "boolean"
+        },
+        "template_path": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Template Path",
+          "type": "array"
+        },
+        "document_kind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Document Kind"
+        },
+        "document_subkind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Document Subkind"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        },
+        "alternatives": {
+          "items": {
+            "$ref": "#/$defs/Alternative"
+          },
+          "title": "Alternatives",
+          "type": "array"
+        }
+      },
+      "required": [
+        "document_root",
+        "direction",
+        "is_letter",
+        "template_path",
+        "document_kind"
+      ],
+      "title": "Classification",
+      "type": "object"
+    },
+    "ContractDetails": {
+      "additionalProperties": false,
+      "description": "Срок и предмет договора; роль организации требует подтверждённого контекста.",
+      "properties": {
+        "profile": {
+          "enum": [
+            "D04",
+            "D05"
+          ],
+          "title": "Profile",
+          "type": "string"
+        },
+        "contract_subject": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Contract Subject"
+        },
+        "our_role": {
+          "anyOf": [
+            {
+              "enum": [
+                "supplier",
+                "customer"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Our Role"
+        },
+        "valid_from": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Valid From"
+        },
+        "valid_until": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Valid Until"
+        },
+        "total_amount": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total Amount"
+        },
+        "currency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Currency"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "title": "ContractDetails",
+      "type": "object"
+    },
+    "ContractReference": {
+      "additionalProperties": false,
+      "description": "Номер/дата договора из скана без ссылки или GUID базы 1С.",
+      "properties": {
+        "number": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Number"
+        },
+        "date": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Date"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Kind"
+        }
+      },
+      "title": "ContractReference",
+      "type": "object"
+    },
+    "DetailedAmount": {
+      "additionalProperties": false,
+      "description": "JSON 2.0 сохраняет точное десятичное представление суммы.",
+      "properties": {
+        "type": {
+          "title": "Type",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value",
+          "type": "string"
+        },
+        "currency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Currency"
+        }
+      },
+      "required": [
+        "type",
+        "value"
+      ],
+      "title": "DetailedAmount",
+      "type": "object"
+    },
+    "DetailedDocument": {
+      "additionalProperties": false,
+      "description": "Одна регистрация JSON 2.0 с полным provenance, классификацией и PDF.",
+      "properties": {
+        "document_id": {
+          "title": "Document Id",
+          "type": "string"
+        },
+        "segment_index": {
+          "minimum": 1,
+          "title": "Segment Index",
+          "type": "integer"
+        },
+        "source_pages": {
+          "items": {
+            "$ref": "#/$defs/PageRef"
+          },
+          "title": "Source Pages",
+          "type": "array"
+        },
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "kind_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Kind Code"
+        },
+        "kind_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Kind Name"
+        },
+        "kind_path": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Kind Path",
+          "type": "array"
+        },
+        "requisites": {
+          "$ref": "#/$defs/DetailedRequisites"
+        },
+        "details": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "D01": "#/$defs/LetterDetails",
+                  "D02": "#/$defs/EnforcementDetails",
+                  "D03": "#/$defs/PrimaryDetails",
+                  "D04": "#/$defs/ContractDetails",
+                  "D05": "#/$defs/ContractDetails",
+                  "D06": "#/$defs/ServiceDetails",
+                  "D07": "#/$defs/SpecificationDetails",
+                  "D08": "#/$defs/SpecificationDetails",
+                  "D09": "#/$defs/AmendmentDetails",
+                  "D10": "#/$defs/DisagreementDetails",
+                  "D11": "#/$defs/AppendixDetails"
+                },
+                "propertyName": "profile"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/LetterDetails"
+                },
+                {
+                  "$ref": "#/$defs/EnforcementDetails"
+                },
+                {
+                  "$ref": "#/$defs/PrimaryDetails"
+                },
+                {
+                  "$ref": "#/$defs/ContractDetails"
+                },
+                {
+                  "$ref": "#/$defs/ServiceDetails"
+                },
+                {
+                  "$ref": "#/$defs/SpecificationDetails"
+                },
+                {
+                  "$ref": "#/$defs/AmendmentDetails"
+                },
+                {
+                  "$ref": "#/$defs/DisagreementDetails"
+                },
+                {
+                  "$ref": "#/$defs/AppendixDetails"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Details"
+        },
+        "field_evidence": {
+          "additionalProperties": {
+            "items": {
+              "$ref": "#/$defs/Evidence"
+            },
+            "type": "array"
+          },
+          "title": "Field Evidence",
+          "type": "object"
+        },
+        "one_c": {
+          "$ref": "#/$defs/OneC"
+        },
+        "recognition": {
+          "$ref": "#/$defs/Recognition"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Warnings",
+          "type": "array"
+        },
+        "attachment_file": {
+          "$ref": "#/$defs/AttachmentFile"
+        }
+      },
+      "required": [
+        "document_id",
+        "segment_index",
+        "source_pages",
+        "classification",
+        "kind_code",
+        "kind_name",
+        "kind_path",
+        "requisites",
+        "details",
+        "field_evidence",
+        "one_c",
+        "recognition",
+        "warnings",
+        "attachment_file"
+      ],
+      "title": "DetailedDocument",
+      "type": "object"
+    },
+    "DetailedItem": {
+      "additionalProperties": false,
+      "description": "Товарные строки JSON 2.0 сохраняют десятичные строки.",
+      "properties": {
+        "line_no": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Line No"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "quantity": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Quantity"
+        },
+        "price": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Price"
+        },
+        "amount": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Amount"
+        },
+        "delivery_term": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Delivery Term"
+        }
+      },
+      "title": "DetailedItem",
+      "type": "object"
+    },
+    "DetailedRequisites": {
+      "additionalProperties": false,
+      "description": "Тот же набор общих полей, но точная денежная сериализация расширенного контракта.",
+      "properties": {
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subject"
+        },
+        "document_number": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Document Number"
+        },
+        "document_date": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Document Date"
+        },
+        "document_date_raw": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Document Date Raw"
+        },
+        "sender": {
+          "$ref": "#/$defs/Party"
+        },
+        "recipient": {
+          "$ref": "#/$defs/Party"
+        },
+        "signatories": {
+          "items": {
+            "$ref": "#/$defs/Signatory"
+          },
+          "title": "Signatories",
+          "type": "array"
+        },
+        "related_entities": {
+          "$ref": "#/$defs/RelatedEntities"
+        },
+        "amounts": {
+          "items": {
+            "$ref": "#/$defs/DetailedAmount"
+          },
+          "title": "Amounts",
+          "type": "array"
+        },
+        "response_required": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Response Required"
+        },
+        "response_due_date": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Response Due Date"
+        },
+        "delivery_channel": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Delivery Channel"
+        },
+        "attachments": {
+          "items": {
+            "$ref": "#/$defs/Attachment"
+          },
+          "title": "Attachments",
+          "type": "array"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/DetailedItem"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Summary"
+        }
+      },
+      "title": "DetailedRequisites",
+      "type": "object"
+    },
+    "DisagreementDetails": {
+      "additionalProperties": false,
+      "description": "Разногласия с сохранением точного вида протокола.",
+      "properties": {
+        "profile": {
+          "const": "D10",
+          "title": "Profile",
+          "type": "string"
+        },
+        "parent_contract": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContractReference"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "disputed_terms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Disputed Terms",
+          "type": "array"
+        },
+        "total_amount": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total Amount"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "title": "DisagreementDetails",
+      "type": "object"
+    },
+    "DocumentRoot": {
+      "description": "Утверждённые владельцем шесть родов документов.",
+      "enum": [
+        "Внутренние документы компании",
+        "Входящая/Исходящая корреспонденция",
+        "Договоры",
+        "Документы связанные с исполнением договоров",
+        "Процессуальные документы",
+        "Составляющие документы договора"
+      ],
+      "title": "DocumentRoot",
+      "type": "string"
+    },
+    "EnforcementDetails": {
+      "additionalProperties": false,
+      "description": "Специальные факты именно исполнительного листа.",
+      "properties": {
+        "profile": {
+          "const": "D02",
+          "title": "Profile",
+          "type": "string"
+        },
+        "court_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Court Name"
+        },
+        "court_case_number": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Court Case Number"
+        },
+        "issue_date": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Issue Date"
+        },
+        "claimant": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Claimant"
+        },
+        "debtor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Debtor"
+        },
+        "enforcement_subject": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Enforcement Subject"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "title": "EnforcementDetails",
+      "type": "object"
+    },
+    "Evidence": {
+      "additionalProperties": false,
+      "description": "Короткое свидетельство конкретной физической страницы; confidence не выдумывается.",
+      "properties": {
+        "file_id": {
+          "title": "File Id",
+          "type": "string"
+        },
+        "page_number": {
+          "minimum": 1,
+          "title": "Page Number",
+          "type": "integer"
+        },
+        "raw": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw"
+        },
+        "status": {
+          "enum": [
+            "found",
+            "not_present",
+            "unreadable",
+            "ambiguous",
+            "explicit_no_number",
+            "not_applicable"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "image",
+            "ocr",
+            "context"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        }
+      },
+      "required": [
+        "file_id",
+        "page_number",
+        "status",
+        "source"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    },
+    "LetterDetails": {
+      "additionalProperties": false,
+      "description": "Письма используют общие реквизиты; профиль не дублирует их отдельной карточкой.",
+      "properties": {
+        "profile": {
+          "const": "D01",
+          "title": "Profile",
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "title": "LetterDetails",
+      "type": "object"
+    },
+    "OneC": {
+      "additionalProperties": false,
+      "description": "Справочные поля карточки; регистрационные статусы и matching отсутствуют.",
+      "properties": {
+        "view_of_document": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "View Of Document"
+        },
+        "folder": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Folder"
+        },
+        "template_leaf": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Template Leaf"
+        },
+        "counterparty": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Counterparty"
+        },
+        "organization": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Organization"
+        },
+        "addressee": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Addressee"
+        },
+        "received_via": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Received Via"
+        },
+        "answer_required": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Answer Required"
+        },
+        "form": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Form"
+        },
+        "project": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project"
+        },
+        "comment": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Comment"
+        }
+      },
+      "title": "OneC",
+      "type": "object"
+    },
+    "PageRef": {
+      "additionalProperties": false,
+      "description": "Неизменяемый адрес страницы исходного файла.",
+      "properties": {
+        "file_id": {
+          "title": "File Id",
+          "type": "string"
+        },
+        "page_number": {
+          "minimum": 1,
+          "title": "Page Number",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "file_id",
+        "page_number"
+      ],
+      "title": "PageRef",
+      "type": "object"
+    },
+    "Party": {
+      "additionalProperties": false,
+      "description": "Поисковые реквизиты организации или лица, доступные из документа.",
+      "properties": {
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "inn": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Inn"
+        },
+        "kpp": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Kpp"
+        },
+        "ogrn": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ogrn"
+        },
+        "address": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Address"
+        },
+        "email": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Email"
+        },
+        "phone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Phone"
+        }
+      },
+      "title": "Party",
+      "type": "object"
+    },
+    "PrimaryDetails": {
+      "additionalProperties": false,
+      "description": "Различает первичку, налоговые документы, сверку и запрос платежа в одной категории D03.",
+      "properties": {
+        "profile": {
+          "const": "D03",
+          "title": "Profile",
+          "type": "string"
+        },
+        "primary_document_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Primary Document Type"
+        },
+        "primary_document_role": {
+          "anyOf": [
+            {
+              "enum": [
+                "primary",
+                "tax",
+                "payment_request",
+                "reconciliation"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Primary Document Role"
+        },
+        "parent_contract": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContractReference"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "total_amount": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total Amount"
+        },
+        "vat_amount": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Vat Amount"
+        },
+        "currency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Currency"
+        },
+        "payment_purpose": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Payment Purpose"
+        },
+        "payment_terms": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Payment Terms"
+        },
+        "bank_details": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bank Details"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "title": "PrimaryDetails",
+      "type": "object"
+    },
+    "Recognition": {
+      "additionalProperties": false,
+      "description": "Честная диагностика распознавания, отдельно от извлечённых фактов.",
+      "properties": {
+        "ocr_engine": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ocr Engine"
+        },
+        "languages": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Languages",
+          "type": "array"
+        },
+        "low_confidence_fields": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Low Confidence Fields",
+          "type": "array"
+        }
+      },
+      "title": "Recognition",
+      "type": "object"
+    },
+    "RelatedEntities": {
+      "additionalProperties": false,
+      "description": "Сохраняет поисковые связи без обращения в базу 1С.",
+      "properties": {
+        "contracts": {
+          "items": {
+            "$ref": "#/$defs/RelatedEntity"
+          },
+          "title": "Contracts",
+          "type": "array"
+        },
+        "specifications": {
+          "items": {
+            "$ref": "#/$defs/RelatedEntity"
+          },
+          "title": "Specifications",
+          "type": "array"
+        },
+        "invoices": {
+          "items": {
+            "$ref": "#/$defs/RelatedEntity"
+          },
+          "title": "Invoices",
+          "type": "array"
+        },
+        "acts": {
+          "items": {
+            "$ref": "#/$defs/RelatedEntity"
+          },
+          "title": "Acts",
+          "type": "array"
+        },
+        "letters": {
+          "items": {
+            "$ref": "#/$defs/RelatedEntity"
+          },
+          "title": "Letters",
+          "type": "array"
+        },
+        "orders": {
+          "items": {
+            "$ref": "#/$defs/RelatedEntity"
+          },
+          "title": "Orders",
+          "type": "array"
+        },
+        "court_cases": {
+          "items": {
+            "$ref": "#/$defs/RelatedEntity"
+          },
+          "title": "Court Cases",
+          "type": "array"
+        }
+      },
+      "title": "RelatedEntities",
+      "type": "object"
+    },
+    "RelatedEntity": {
+      "additionalProperties": false,
+      "description": "Ссылка на договор, акт, счёт и другие упомянутые документы.",
+      "properties": {
+        "number": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Number"
+        },
+        "date": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Date"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Type"
+        }
+      },
+      "title": "RelatedEntity",
+      "type": "object"
+    },
+    "ServiceDetails": {
+      "additionalProperties": false,
+      "description": "Доходный сервисный договор, а не произвольный подряд.",
+      "properties": {
+        "profile": {
+          "const": "D06",
+          "title": "Profile",
+          "type": "string"
+        },
+        "service_subject": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Subject"
+        },
+        "our_role": {
+          "anyOf": [
+            {
+              "const": "service_provider",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Our Role"
+        },
+        "valid_from": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Valid From"
+        },
+        "valid_until": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Valid Until"
+        },
+        "total_amount": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total Amount"
+        },
+        "currency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Currency"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "title": "ServiceDetails",
+      "type": "object"
+    },
+    "Signatory": {
+      "additionalProperties": false,
+      "description": "Подписант или исполнитель без выдуманного статуса 1С.",
+      "properties": {
+        "role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Role"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "position": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Position"
+        }
+      },
+      "title": "Signatory",
+      "type": "object"
+    },
+    "SpecificationDetails": {
+      "additionalProperties": false,
+      "description": "Спецификация содержит только напечатанные условия договора-основания и сумму.",
+      "properties": {
+        "profile": {
+          "enum": [
+            "D07",
+            "D08"
+          ],
+          "title": "Profile",
+          "type": "string"
+        },
+        "parent_contract": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContractReference"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "total_amount": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total Amount"
+        },
+        "currency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Currency"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "title": "SpecificationDetails",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Отдельная расширенная выдача; старые задания не мигрируются в неё по догадке.",
+  "properties": {
+    "schema_version": {
+      "const": "2.0",
+      "default": "2.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "batch_id": {
+      "title": "Batch Id",
+      "type": "string"
+    },
+    "documents": {
+      "items": {
+        "$ref": "#/$defs/DetailedDocument"
+      },
+      "title": "Documents",
+      "type": "array"
+    }
+  },
+  "required": [
+    "batch_id",
+    "documents"
+  ],
+  "title": "DetailedResult",
+  "type": "object"
+}

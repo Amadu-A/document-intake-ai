@@ -112,7 +112,7 @@ def test_nonletter_outgoing_and_party_name_normalization():
     validate_extraction(raw, group(), ORGANIZATION)
     assert supported_direction(raw.requisites, ORGANIZATION) == "outgoing"
     mapped = project_one_c(raw, ORGANIZATION)
-    assert mapped.organization == ORGANIZATION and mapped.counterparty is None
+    assert mapped.organization == ORGANIZATION and mapped.counterparty == "Внешний получатель"
     assert mapped.view_of_document is None
 
 
@@ -142,7 +142,7 @@ async def test_identifier_completeness_gets_one_vlm_review_without_ocr_autofill(
 ):
     """Наличие метки OCR инициирует один просмотр; неразборчивые цифры остаются null."""
     raw, reviewed = facts(), facts()
-    reviewed["requisites"]["sender"]["inn"] = "SYNTHETIC-ID" if readable else None
+    reviewed["requisites"]["sender"]["inn"] = "7701234567" if readable else None
     container.vision.answers.extend([raw, reviewed])
     job = Job(
         id="synthetic-job",
@@ -162,7 +162,7 @@ async def test_identifier_completeness_gets_one_vlm_review_without_ocr_autofill(
     )
     assert len(container.vision.calls) == 2
     assert container.vision.calls[-1]["context"]["verification_fields"] == ["requisites.sender.inn"]
-    assert result.requisites.sender.inn == ("SYNTHETIC-ID" if readable else None)
+    assert result.requisites.sender.inn == ("7701234567" if readable else None)
 
 
 @pytest.mark.parametrize("field", ["document_number", "document_date"])
@@ -249,7 +249,7 @@ async def test_retry_receives_candidate_and_keeps_independent_legible_fact(conta
 
     def revise(context):
         """Проверяет наличие исходного кандидата и конкретной причины ограниченного повтора."""
-        assert context["candidate"] == original
+        assert {key: context["candidate"][key] for key in original} == original
         assert context["candidate"]["requisites"][independent] == raw["requisites"][independent]
         assert context["validation_errors"]
         assert context["revision_instruction"]
@@ -326,7 +326,7 @@ async def test_retry_cannot_wash_away_declared_handwriting_uncertainty(
     assert getattr(result.requisites, field) is None
     assert len(container.vision.calls) == 3
     schemas = [
-        call["schema"]["$defs"]["Requisites"]["properties"][field]
+        call["schema"]["$defs"]["DetailedRequisites"]["properties"][field]
         for call in container.vision.calls
     ]
     assert schemas[0] != {"type": "null"}

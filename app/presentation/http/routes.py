@@ -7,7 +7,7 @@ import json
 from typing import Annotated, Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, Form, Header, Query, Request, UploadFile
+from fastapi import APIRouter, File, Form, Header, Query, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.routing import APIRoute
@@ -16,9 +16,22 @@ from starlette.formparsers import MultiPartException
 
 from app.domain.boundaries import ExcludedPage, ManualDocument, ManualPlan
 from app.domain.errors import IntakeError
+from app.domain.extractions import DetailedResult
 from app.domain.jobs import TERMINAL, utcnow
+from app.domain.plan_edits import PlanEdit
 from app.domain.schema import BatchResult
 from app.domain.segmentation import PageRef
+from app.presentation.http.contracts import (
+    ERROR_RESPONSES,
+    ArchiveView,
+    DocumentManifest,
+    JobList,
+    PageSlice,
+    PromptView,
+    SegmentationView,
+    StatusView,
+    file_responses,
+)
 from app.presentation.http.dependencies import OptionalOwner, Owner, Services, authenticate
 from app.presentation.http.multipart import BoundedMultipartParser
 
@@ -54,13 +67,36 @@ class LimitedMultipartRoute(APIRoute):
         return handle
 
 
-router = APIRouter(prefix="/api/v1", tags=["Документы"], route_class=LimitedMultipartRoute)
+router = APIRouter(
+    prefix="/api/v1",
+    tags=["Документы"],
+    route_class=LimitedMultipartRoute,
+    responses=ERROR_RESPONSES,
+)
+
+UploadedFiles = Annotated[
+    list[UploadFile],
+    File(
+        description="Один или несколько файлов; повторяйте multipart-поле files",
+        json_schema_extra={"items": {"type": "string", "format": "binary"}},
+    ),
+]
 
 
 class PromptBody(BaseModel):
     """Два сессионных текста; технические контракты через UI не изменяются."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "segmentation": "Полный текст промпта сравнения OCR соседей",
+                    "extraction": "Полный текст промпта классификации и извлечения",
+                }
+            ]
+        },
+    )
     segmentation: str
     extraction: str
 
@@ -68,7 +104,12 @@ class PromptBody(BaseModel):
 class ModeBody(BaseModel):
     """Явная смена режима с optimistic concurrency; owner никогда не принимается из body."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [{"expected_revision": 2, "auto_split": False, "skip_segmentation": True}]
+        },
+    )
     expected_revision: int = Field(ge=0)
     auto_split: bool
     skip_segmentation: bool
@@ -77,7 +118,30 @@ class ModeBody(BaseModel):
 class DraftBody(BaseModel):
     """Физические страницы draft; action используется только для минимального аудита."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "expected_revision": 3,
+                    "documents": [
+                        {
+                            "client_id": "document-a",
+                            "pages": [{"file_id": "source-a", "page_number": 1}],
+                        }
+                    ],
+                    "excluded_pages": [
+                        {
+                            "file_id": "source-a",
+                            "page_number": 2,
+                            "reason": "Явно исключено сотрудником",
+                        }
+                    ],
+                    "action": "edit",
+                }
+            ]
+        },
+    )
     expected_revision: int = Field(ge=0)
     documents: list[ManualDocument] = Field(max_length=10000)
     excluded_pages: list[ExcludedPage] = Field(default_factory=list, max_length=10000)
@@ -99,7 +163,9 @@ class DraftBody(BaseModel):
 class ConfirmBody(BaseModel):
     """Повтор одной подтверждённой ревизии не создаёт второе выполнение."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_extra={"examples": [{"expected_revision": 4}]}
+    )
     expected_revision: int = Field(ge=0)
 
 
@@ -124,15 +190,32 @@ async def upload_request(
             await upload.close()
 
 
-@router.post("/jobs", status_code=202, summary="Загрузить файлы и запустить анализ")
+@router.post(
+    "/jobs",
+    status_code=202,
+    response_model=StatusView,
+    summary="Загрузить файлы и запустить анализ",
+)
 async def submit(
     container: Services,
     owner: Owner,
-    files: list[UploadFile],
-    organization_hint: Annotated[str | None, Form()] = None,
+    files: UploadedFiles,
+    organization_hint: Annotated[
+        str | None,
+        Form(
+            description="Доверенная обслуживаемая организация; "
+            "без неё роли и направление не угадываются",
+            max_length=1000,
+        ),
+    ] = None,
     idempotency_key: Annotated[str | None, Header()] = None,
-    auto_split: Annotated[bool, Form()] = False,
-    skip_segmentation: Annotated[bool, Form()] = False,
+    auto_split: Annotated[
+        bool, Form(description="Явный Auto без подтверждения; default false")
+    ] = False,
+    skip_segmentation: Annotated[
+        bool,
+        Form(description="Пропустить сравнения: один файл — один блок; несовместимо с auto_split"),
+    ] = False,
 ):
     """Возвращает 202 сразу после загрузки; VLM работает в независимом worker."""
     return await upload_request(
@@ -147,12 +230,19 @@ async def submit(
     )
 
 
-@router.post("/uploads", status_code=202, summary="Сохранить пакет до запуска анализа")
+@router.post(
+    "/uploads",
+    status_code=202,
+    response_model=StatusView,
+    summary="Сохранить пакет до запуска анализа",
+)
 async def upload(
     container: Services,
     owner: Owner,
-    files: list[UploadFile],
-    organization_hint: Annotated[str | None, Form()] = None,
+    files: UploadedFiles,
+    organization_hint: Annotated[
+        str | None, Form(description="Доверенная обслуживаемая организация", max_length=1000)
+    ] = None,
     idempotency_key: Annotated[str | None, Header()] = None,
     auto_split: Annotated[bool, Form()] = False,
     skip_segmentation: Annotated[bool, Form()] = False,
@@ -170,20 +260,20 @@ async def upload(
     )
 
 
-@router.post("/jobs/{job_id}/start", status_code=202)
+@router.post("/jobs/{job_id}/start", status_code=202, response_model=StatusView)
 async def start(job_id: str, container: Services, owner: Owner):
     """Запускает сохранённый пакет со снимками двух текущих промптов."""
     return container.exports.status(await container.intake.start(job_id, owner))
 
 
-@router.get("/jobs/{job_id}")
-@router.get("/jobs/{job_id}/snapshot")
+@router.get("/jobs/{job_id}", response_model=StatusView)
+@router.get("/jobs/{job_id}/snapshot", response_model=StatusView)
 async def status(job_id: str, container: Services, owner: Owner, include_pages: bool = True):
     """Отдаёт согласованный snapshot/cursor без OCR, prompts и локальных путей."""
     return container.exports.status(await container.intake.get(job_id, owner), include_pages)
 
 
-@router.get("/jobs/{job_id}/pages")
+@router.get("/jobs/{job_id}/pages", response_model=PageSlice)
 async def pages(
     job_id: str,
     container: Services,
@@ -195,13 +285,13 @@ async def pages(
     return container.exports.page_slice(await container.intake.get(job_id, owner), offset, limit)
 
 
-@router.get("/jobs/{job_id}/segmentation")
+@router.get("/jobs/{job_id}/segmentation", response_model=SegmentationView)
 async def segmentation(job_id: str, container: Services, owner: Owner):
     """Публикует авторизованному owner черновик, предложение и подтверждённую ревизию."""
     return container.exports.segmentation(await container.intake.get(job_id, owner))
 
 
-@router.patch("/jobs/{job_id}/mode")
+@router.patch("/jobs/{job_id}/mode", response_model=SegmentationView)
 async def change_mode(job_id: str, body: ModeBody, container: Services, owner: Owner):
     """Передаёт переключение режима общему сценарию, не создавая инфраструктуру в handler."""
     job = await container.boundaries.mode(
@@ -210,7 +300,7 @@ async def change_mode(job_id: str, body: ModeBody, container: Services, owner: O
     return container.exports.segmentation(job)
 
 
-@router.put("/jobs/{job_id}/segmentation")
+@router.put("/jobs/{job_id}/segmentation", response_model=SegmentationView)
 async def save_segmentation(job_id: str, body: DraftBody, container: Services, owner: Owner):
     """Сохраняет разметку и manual-режим одной серверной операцией."""
     plan = ManualPlan(
@@ -220,12 +310,18 @@ async def save_segmentation(job_id: str, body: DraftBody, container: Services, o
     return container.exports.segmentation(job)
 
 
-@router.post("/jobs/{job_id}/segmentation/confirm", status_code=202)
+@router.post("/jobs/{job_id}/segmentation/confirm", status_code=202, response_model=StatusView)
 async def confirm_segmentation(job_id: str, body: ConfirmBody, container: Services, owner: Owner):
     """Подтверждает сохранённые границы, сохраняя идемпотентность по ревизии."""
     return container.exports.status(
         await container.boundaries.confirm(job_id, owner, body.expected_revision)
     )
+
+
+@router.post("/jobs/{job_id}/segmentation/actions", response_model=SegmentationView)
+async def edit_segmentation(job_id: str, body: PlanEdit, container: Services, owner: Owner):
+    """Серверные split/merge/create/exclude/restore/move без браузера; revision обязателен."""
+    return container.exports.segmentation(await container.boundaries.edit(job_id, owner, body))
 
 
 @router.get("/jobs/{job_id}/result", response_model=BatchResult)
@@ -234,25 +330,42 @@ async def result(job_id: str, container: Services, owner: Owner):
     return await container.exports.result(job_id, owner)
 
 
-@router.post("/jobs/{job_id}/cancel")
+@router.get("/jobs/{job_id}/extractions", response_model=DetailedResult)
+async def extractions(job_id: str, container: Services, owner: Owner):
+    """Возвращает отдельный JSON 2.0 с профилями и evidence; до готовности/для старого v1 — 409."""
+    return await container.exports.extractions(job_id, owner)
+
+
+@router.get("/jobs", response_model=JobList)
+async def list_jobs(
+    container: Services,
+    owner: Owner,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=99),
+):
+    """Перечисляет только свои задания до TTL: offset/limit и has_more без чужих данных."""
+    return await container.exports.list_jobs(owner, offset, limit)
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=StatusView)
 async def cancel(job_id: str, container: Services, owner: Owner):
     """Идемпотентно завершает отмену и отзывает lease worker."""
     return container.exports.status(await container.intake.cancel(job_id, owner))
 
 
-@router.get("/session/prompts", tags=["Промпты"])
+@router.get("/session/prompts", response_model=PromptView, tags=["Промпты"])
 async def prompts(container: Services, owner: Owner):
     """Позволяет прочитать оба промпта без загрузки документа и запуска анализа."""
     return await container.prompts.get(owner)
 
 
-@router.put("/session/prompts", tags=["Промпты"])
+@router.put("/session/prompts", response_model=PromptView, tags=["Промпты"])
 async def save_prompts(body: PromptBody, container: Services, owner: Owner):
     """Сохраняет два независимых текста только в текущую сессию/интеграцию."""
     return await container.prompts.save(owner, body.model_dump())
 
 
-@router.post("/session/prompts/{stage}/restore", tags=["Промпты"])
+@router.post("/session/prompts/{stage}/restore", response_model=PromptView, tags=["Промпты"])
 async def restore_prompts(stage: str, container: Services, owner: Owner):
     """Восстанавливает базовую версию одной вкладки."""
     return await container.prompts.restore(owner, stage)
@@ -306,7 +419,11 @@ async def download(
     return StreamingResponse(chunks(), media_type=artifact["mime_type"], headers=headers)
 
 
-@router.get("/jobs/{job_id}/source-files/{file_id}")
+@router.get(
+    "/jobs/{job_id}/source-files/{file_id}",
+    response_class=StreamingResponse,
+    responses=file_responses("application/octet-stream"),
+)
 async def source_file(
     job_id: str, file_id: str, container: Services, owner: OptionalOwner, token: str | None = None
 ):
@@ -314,13 +431,17 @@ async def source_file(
     return await download(container, job_id, "source", file_id, owner, token)
 
 
-@router.post("/jobs/{job_id}/archive")
+@router.post("/jobs/{job_id}/archive", response_model=ArchiveView)
 async def prepare_archive(job_id: str, container: Services, owner: Owner):
     """Подготавливает именованные PDF в ZIP; незавершённый пакет возвращает 409."""
     return await container.exports.prepare_archive(job_id, owner)
 
 
-@router.get("/jobs/{job_id}/archive")
+@router.get(
+    "/jobs/{job_id}/archive",
+    response_class=StreamingResponse,
+    responses=file_responses("application/zip"),
+)
 async def archive_file(
     job_id: str, container: Services, owner: OptionalOwner, token: str | None = None
 ):
@@ -328,7 +449,11 @@ async def archive_file(
     return await download(container, job_id, "archive", "", owner, token)
 
 
-@router.get("/jobs/{job_id}/documents/{document_id}/file")
+@router.get(
+    "/jobs/{job_id}/documents/{document_id}/file",
+    response_class=StreamingResponse,
+    responses=file_responses("application/pdf"),
+)
 async def document_file(
     job_id: str,
     document_id: str,
@@ -340,7 +465,11 @@ async def document_file(
     return await download(container, job_id, "document", document_id, owner, token)
 
 
-@router.get("/jobs/{job_id}/pages/{file_id}/{page}/preview")
+@router.get(
+    "/jobs/{job_id}/pages/{file_id}/{page}/preview",
+    response_class=StreamingResponse,
+    responses=file_responses("image/png"),
+)
 async def preview(
     job_id: str,
     file_id: str,
@@ -353,7 +482,11 @@ async def preview(
     return await download(container, job_id, "preview", file_id, owner, token, page)
 
 
-@router.get("/jobs/{job_id}/pages/{file_id}/{page}/thumbnail")
+@router.get(
+    "/jobs/{job_id}/pages/{file_id}/{page}/thumbnail",
+    response_class=StreamingResponse,
+    responses=file_responses("image/png"),
+)
 async def thumbnail(
     job_id: str,
     file_id: str,
@@ -366,7 +499,7 @@ async def thumbnail(
     return await download(container, job_id, "thumbnail", file_id, owner, token, page)
 
 
-@router.get("/jobs/{job_id}/documents/{document_id}/manifest")
+@router.get("/jobs/{job_id}/documents/{document_id}/manifest", response_model=DocumentManifest)
 async def document_manifest(job_id: str, document_id: str, container: Services, owner: Owner):
     """Отдаёт provenance сквозного комплекта без расширения JSON 1.0."""
     job = await container.intake.get(job_id, owner)
@@ -386,7 +519,11 @@ async def document_manifest(job_id: str, document_id: str, container: Services, 
     }
 
 
-@router.get("/jobs/{job_id}/events")
+@router.get(
+    "/jobs/{job_id}/events",
+    response_class=StreamingResponse,
+    responses={200: {"content": {"text/event-stream": {"schema": {"type": "string"}}}}},
+)
 async def events(
     job_id: str,
     request: Request,

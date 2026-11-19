@@ -6,7 +6,10 @@ from typing import Literal
 from pydantic import Field
 
 from app.domain.boundaries import FixedGroup
+from app.domain.document_kinds import categories
+from app.domain.extractions import DetailedFacts
 from app.domain.schema import Classification, Extracted, StrictModel
+from app.domain.segmentation import PageRef
 
 MAX_VLM_PAGES = 8
 
@@ -17,10 +20,14 @@ class DocumentClassification(StrictModel):
     classification: Classification
     continuation_summary: str | None = Field(max_length=2000)
     warnings: list[str]
+    kind_code: str | None = Field(None, json_schema_extra={"enum": [None, *categories()]})
+    our_role: Literal["supplier", "customer", "service_provider"] | None = None
+    role_evidence: str | None = Field(None, max_length=500)
+    role_source_page: PageRef | None = None
 
 
 class DocumentProcessing(StrictModel):
-    """Публичная диагностика одного блока без OCR, реквизитов и внутренних ответов модели."""
+    """Диагностика блока; unsupported_template читается только из исторических заданий."""
 
     segment_index: int = Field(ge=1)
     status: Literal[
@@ -40,6 +47,7 @@ class DocumentCheckpoint(StrictModel):
     """Приватный проверенный результат блока для восстановления worker без повторной VLM."""
 
     fingerprint: str
-    facts: Extracted
+    facts: DetailedFacts | Extracted
     group: FixedGroup
     processing: DocumentProcessing
+    extraction_schema_version: str = "1.0"

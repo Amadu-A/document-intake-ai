@@ -1,0 +1,98 @@
+{
+  "schema_version": "1.0",
+  "batch_id": "BATCH_ID",
+  "files": [
+    {
+      "file_id": "FILE_ID",
+      "file_name": "source.pdf",
+      "file_url": "https://example.invalid/ORIGINAL_TEMP_URL",
+      "mime_type": "application/pdf",
+      "documents": [
+        {
+          "document_id": "DOCUMENT_ID",
+          "segment_index": 1,
+          "pages": [
+            1
+          ],
+          "split_confidence": null,
+          "classification": {
+            "document_root": "Документы связанные с исполнением договоров",
+            "direction": null,
+            "is_letter": false,
+            "template_path": [],
+            "document_kind": "Счёт на оплату",
+            "document_subkind": null,
+            "confidence": null,
+            "alternatives": []
+          },
+          "requisites": {
+            "title": "Счёт на оплату № 97 от 13 августа 2026 г.",
+            "subject": null,
+            "document_number": "97",
+            "document_date": "2026-08-13",
+            "document_date_raw": "13 августа 2026 г.",
+            "sender": {
+              "name": null,
+              "inn": null,
+              "kpp": null,
+              "ogrn": null,
+              "address": null,
+              "email": null,
+              "phone": null
+            },
+            "recipient": {
+              "name": null,
+              "inn": null,
+              "kpp": null,
+              "ogrn": null,
+              "address": null,
+              "email": null,
+              "phone": null
+            },
+            "signatories": [],
+            "related_entities": {
+              "contracts": [],
+              "specifications": [],
+              "invoices": [],
+              "acts": [],
+              "letters": [],
+              "orders": [],
+              "court_cases": []
+            },
+            "amounts": [],
+            "response_required": null,
+            "response_due_date": null,
+            "delivery_channel": null,
+            "attachments": [],
+            "items": [],
+            "summary": null
+          },
+          "one_c": {
+            "view_of_document": null,
+            "folder": null,
+            "template_leaf": null,
+            "counterparty": null,
+            "organization": null,
+            "addressee": null,
+            "received_via": null,
+            "answer_required": null,
+            "form": null,
+            "project": null,
+            "comment": null
+          },
+          "recognition": {
+            "ocr_engine": "docling",
+            "languages": [],
+            "low_confidence_fields": []
+          },
+          "warnings": [],
+          "attachment_file": {
+            "file_name": "doc_1_Счёт_на_оплату_97_2026-08-13.pdf",
+            "file_url": "https://example.invalid/TEMP_SIGNED_URL",
+            "mime_type": "application/pdf"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 {
-  "version": "1.1",
-  "description": "Критерии пяти пар: письма с реквизитами, неписьма с явной заглушкой по решению 17.11.2026",
+  "version": "1.2",
+  "description": "Пять пар: факты неписем читаются из неизменённых частных JSON вместо прежних заглушек; корень D09 — по реестру 19.11.2026",
   "cases": [
     {
       "file": "4-2591.pdf",
@@ -46,32 +46,34 @@
     },
     {
       "file": "Дополнительное соглашение № 1.pdf",
-      "processing_status": "unsupported_template",
-      "pages": 1,
-      "registrations": 1,
-      "physical_attachments": 0,
-      "checks": [
-        {"path": "classification.document_root", "expected": "Договоры", "page": 1},
-        {"path": "classification.is_letter", "expected": false, "page": 1},
-        {"path": "requisites.document_number", "expected": null, "page": 1},
-        {"path": "requisites.document_date", "expected": null, "page": 1},
-        {"path": "requisites.related_entities.contracts", "expected": [], "page": 1}
-      ]
-    },
-    {
-      "file": "Спецификация №3.pdf",
-      "processing_status": "unsupported_template",
+      "processing_status": "recognized",
       "pages": 1,
       "registrations": 1,
       "physical_attachments": 0,
       "checks": [
         {"path": "classification.document_root", "expected": "Составляющие документы договора", "page": 1},
         {"path": "classification.is_letter", "expected": false, "page": 1},
-        {"path": "requisites.document_number", "expected": null, "page": 1},
-        {"path": "requisites.document_date", "expected": null, "page": 1},
-        {"path": "requisites.related_entities.contracts", "expected": [], "page": 1},
-        {"path": "requisites.amounts", "expected": [], "page": 1},
-        {"path": "requisites.items", "expected": [], "page": 1}
+        {"path": "requisites.document_number", "expected_from_example": true, "page": 1},
+        {"path": "requisites.document_date", "expected_from_example": true, "page": 1},
+        {"path": "requisites.related_entities.contracts.0.number", "expected_from_example": true, "page": 1},
+        {"path": "requisites.related_entities.contracts.0.date", "expected_from_example": true, "page": 1}
+      ]
+    },
+    {
+      "file": "Спецификация №3.pdf",
+      "processing_status": "recognized",
+      "pages": 1,
+      "registrations": 1,
+      "physical_attachments": 0,
+      "checks": [
+        {"path": "classification.document_root", "expected": "Составляющие документы договора", "page": 1},
+        {"path": "classification.is_letter", "expected": false, "page": 1},
+        {"path": "requisites.document_number", "expected_from_example": true, "page": 1},
+        {"path": "requisites.document_date", "expected_from_example": true, "page": 1},
+        {"path": "requisites.related_entities.contracts.0.number", "expected_from_example": true, "page": 1},
+        {"path": "requisites.related_entities.contracts.0.date", "expected_from_example": true, "page": 1},
+        {"path": "requisites.amounts.0.value", "expected_from_example": true, "page": 1},
+        {"path": "requisites.items.0.description", "expected_from_example": true, "page": 1}
       ]
     }
   ]

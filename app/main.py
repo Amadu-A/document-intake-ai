@@ -51,7 +51,11 @@ def create_app(container=None) -> FastAPI:
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,
-        description="REST для 1С: multipart → 202 → polling → JSON 1.0 → PDF",
+        description=(
+            "REST для 1С/Telegram: multipart → 202 → polling → проверка/редактирование "
+            "и подтверждение границ → JSON 1.0 или 2.0 → PDF/ZIP. Авторизация X-API-Key, "
+            "изоляция owner и 24 часа хранения. Автоматический режим включается явно."
+        ),
     )
     application.add_middleware(
         SecurityMiddleware,
@@ -119,6 +123,8 @@ def create_app(container=None) -> FastAPI:
         owner = root.capabilities.session_owner(token)
         if not owner or not await root.database.session_active(owner):
             token = root.capabilities.new_session()
+        elif not token.startswith("v2."):
+            token = root.capabilities.renew_session(token)
         owner = root.capabilities.session_owner(token)
         await root.database.throttle(
             "network:"

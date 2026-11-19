@@ -55,8 +55,8 @@ async def emit(kind, data):
     """Не выводит синтетические факты в обычные логи."""
 
 
-async def test_nonletter_has_classification_and_placeholder_without_extraction(container):
-    """Постановление больше не проходит шаблон письма и дополнительную проверку судебных дат."""
+async def test_nonletter_has_classification_and_common_extraction(container):
+    """Процессуальный документ извлекает общие факты без подгонки под письмо или D02."""
     container.vision.answers.append(classification(False))
     physical = pages(1)
     group = fixed_group([{k: p[k] for k in ("file_id", "page_number")} for p in physical])
@@ -64,11 +64,14 @@ async def test_nonletter_has_classification_and_placeholder_without_extraction(c
         job(container), group, physical, container.analysis._extract, emit
     )
     assert result.classification.document_root == DocumentRoot.PROCEDURAL
-    assert status.status == "unsupported_template" and status.code == "template_not_supported"
+    assert status.status == "recognized" and status.code is None
     assert result.requisites.document_number is None
     assert result.requisites.related_entities.court_cases == []
-    assert "template_not_supported" in str(result.warnings)
-    assert [c["schema"]["title"] for c in container.vision.calls] == ["DocumentClassification"]
+    assert result.kind_code is None and result.details is None
+    assert [c["schema"]["title"] for c in container.vision.calls] == [
+        "DocumentClassification",
+        "DetailedExtraction",
+    ]
 
 
 @pytest.mark.parametrize("count", [1, 8, 9, 17])
@@ -105,7 +108,7 @@ async def test_complete_block_is_classified_first_with_bounded_continuations(con
                     mode="json"
                 )
             )
-    extraction = [c for c in calls if c["schema"]["title"] == "ExtractionDraft" and c["pages"]]
+    extraction = [c for c in calls if c["schema"]["title"] == "DetailedExtraction" and c["pages"]]
     assert all(
         c["context"]["selected_classification"] == result.classification.model_dump(mode="json")
         for c in extraction
@@ -138,11 +141,13 @@ async def test_failed_letter_is_explicitly_incomplete_and_lease_loss_is_not_swal
         await container.analysis.documents.run(job(container), group, physical, revoked, emit)
 
 
-async def test_classification_schema_rejects_invented_letter_kind(container):
-    """Отдельный классификатор использует тот же неизменяемый закрытый каталог."""
+async def test_classification_schema_keeps_factual_kind_and_rejects_invented_template(container):
+    """Фактический вид отделён от закрытого пути шаблона; выдуманный путь запрещён."""
     from pydantic import ValidationError
 
     raw = classification()
-    raw["classification"]["document_kind"] = "Выдуманный вид"
+    raw["classification"]["document_kind"] = "Уведомление"
+    assert DocumentClassification.model_validate(raw).classification.document_kind == "Уведомление"
+    raw["classification"]["template_path"] = ["Выдуманный путь"]
     with pytest.raises(ValidationError):
         DocumentClassification.model_validate(raw)

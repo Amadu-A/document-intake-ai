@@ -143,6 +143,9 @@ async def test_new_packet_cancels_resets_and_ignores_old_requests(container, unu
             await page.route(f"**/api/v1/jobs/{detached}/cancel", cancel_failure)
             await page.locator("[data-cancel]").click()
             await expect(page.locator("[data-notice]")).to_contain_text("Отмена не подтверждена")
+            # Поздний snapshot/SSE не должен стирать отказ команды обычным «Обработка».
+            await page.wait_for_timeout(3200)
+            await expect(page.locator("[data-notice]")).to_contain_text("Отмена не подтверждена")
             await page.locator("[data-new-analysis]").click()
             await expect(page.locator("[data-files]")).to_be_enabled()
             assert any("Сервер не подтвердил отмену" in message for message in messages)

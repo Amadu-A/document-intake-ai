@@ -54,6 +54,21 @@ class SecurityMiddleware:
         async def secured_send(message):
             """Добавляет CSP и no-store без логирования request URL/query."""
             if message["type"] == "http.response.start":
+                token = scope.get("state", {}).get("renew_session_token")
+                if token:
+                    root = scope["app"].state.container
+                    cookie = JSONResponse({})
+                    cookie.set_cookie(
+                        "intake_session",
+                        token,
+                        httponly=True,
+                        samesite="strict",
+                        secure=root.settings.cookie_secure,
+                        max_age=root.settings.session_ttl_seconds,
+                    )
+                    message["headers"] = list(message["headers"]) + [
+                        h for h in cookie.raw_headers if h[0] == b"set-cookie"
+                    ]
                 message["headers"] = list(message["headers"]) + [
                     (b"x-content-type-options", b"nosniff"),
                     (b"referrer-policy", b"no-referrer"),

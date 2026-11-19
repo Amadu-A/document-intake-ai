@@ -65,6 +65,10 @@ class JobRepository(Protocol):
         """Возвращает приватный снимок либо предметную ошибку отсутствия."""
         ...
 
+    async def list_jobs(self, owner: str, offset: int, limit: int) -> list[Job]:
+        """Читает только ещё доступные задания owner с ограниченной пагинацией."""
+        ...
+
     async def start(self, job_id: str, owner: str, prompts: dict[str, str]) -> Job:
         """Снимает immutable snapshots и атомарно ставит загруженное задание в очередь."""
         ...

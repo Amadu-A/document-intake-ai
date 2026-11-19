@@ -119,7 +119,7 @@ class Database(BoundaryTransactions):
         session.add(EventRow(job_id=job.id, sequence=job.cursor, kind=kind, data=data))
 
     def _terminal(self, session, row: JobRow, job: Job, status: str, error: dict | None) -> None:
-        """Завершает задание и начинает единый часовой TTL для всех данных."""
+        """Завершает задание и начинает единый настроенный TTL для всех данных."""
         now = utcnow()
         job.status = status
         job.stage = status
@@ -226,6 +226,22 @@ class Database(BoundaryTransactions):
             if not row:
                 raise IntakeError("job_not_found", "Задание не найдено", 404)
             return Job.model_validate(row.data)
+
+    async def list_jobs(self, owner: str, offset: int, limit: int) -> list[Job]:
+        """Фильтрует owner/TTL в SQL, не раскрывая чужие пакеты даже в метаданных пагинации."""
+        async with self.sessions() as session:
+            expiry = func.replace(JobRow.data["expires_at"].as_string(), "Z", "+00:00")
+            rows = await session.scalars(
+                select(JobRow)
+                .where(
+                    JobRow.owner == owner,
+                    (expiry.is_(None)) | (expiry > utcnow().isoformat()),
+                )
+                .order_by(JobRow.data["created_at"].as_string().desc(), JobRow.id.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+            return [Job.model_validate(row.data) for row in rows]
 
     async def start(self, job_id: str, owner: str, prompts: dict[str, str]) -> Job:
         """Один раз фиксирует промпты и ставит upload в очередь транзакционно."""
@@ -436,7 +452,8 @@ class Database(BoundaryTransactions):
         """Регистрирует анонимную сессию в PostgreSQL без хранения cookie в открытом виде."""
         async with self._transaction() as session:
             await self._serialize_admission(session)
-            if not await session.get(SessionRow, owner):
+            row = await session.get(SessionRow, owner)
+            if not row:
                 session.add(
                     SessionRow(
                         owner=owner,
@@ -444,6 +461,22 @@ class Database(BoundaryTransactions):
                         expires_at=utcnow() + timedelta(seconds=self.settings.session_ttl_seconds),
                     )
                 )
+            else:
+                row.expires_at = utcnow() + timedelta(seconds=self.settings.session_ttl_seconds)
+
+    async def renew_session(self, owner: str) -> bool:
+        """Атомарно продлевает только ещё активную сессию; истёкшая identity не оживает."""
+        async with self._transaction() as session:
+            row = await session.get(SessionRow, owner, with_for_update=True)
+            if row is None:
+                return False
+            expiry = row.expires_at
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=utcnow().tzinfo)
+            if expiry <= utcnow():
+                return False
+            row.expires_at = utcnow() + timedelta(seconds=self.settings.session_ttl_seconds)
+            return True
 
     async def session_active(self, owner: str) -> bool:
         """Проверяет существование и TTL серверной части анонимной сессии."""

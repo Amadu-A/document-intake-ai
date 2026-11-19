@@ -58,12 +58,15 @@ async def panel_server(container, unused_tcp_port):
 
 
 async def test_panel_mixed_result_keeps_export_and_explicit_block_statuses(container, panel_server):
-    """Заглушка и отказ блока видны после reload; проверенное письмо и все PDF доступны."""
+    """Неписьмо извлечено; отказ другого блока виден после reload и не теряет PDF."""
+    nonletter = facts()
+    nonletter["classification"] = classification(False)["classification"]
     container.vision.answers.extend(
         [
             {"solution": False},
             {"solution": False},
             classification(False),
+            nonletter,
             classification(),
             *[{} for _ in range(container.settings.model_attempts)],
             classification(),
@@ -89,13 +92,13 @@ async def test_panel_mixed_result_keeps_export_and_explicit_block_statuses(conta
                 "Обработка завершена", timeout=15000
             )
             await expect(page.locator("[data-processing-description]")).to_have_text(
-                "Распознано писем: 1. Без шаблона: 1. Требуют проверки: 1. PDF всех блоков готовы."
+                "Распознано документов: 2. Требуют проверки: 1. PDF всех блоков готовы."
             )
             await expect(page.locator("[data-validation]")).to_have_text(
                 "JSON 1.0 · есть блоки без распознанных реквизитов · см. предупреждения"
             )
-            await expect(page.locator("[data-facts]")).to_contain_text(
-                "Тип определён · шаблон реквизитов пока не реализован"
+            await expect(page.locator("[data-facts]")).not_to_contain_text(
+                "шаблон реквизитов пока не реализован"
             )
             await expect(page.locator("[data-facts]")).to_contain_text(
                 "Реквизиты не подтверждены · PDF сохранён"

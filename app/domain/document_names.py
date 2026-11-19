@@ -12,13 +12,18 @@ def filename_part(value: str, limit: int) -> str:
     value = unicodedata.normalize("NFC", value)
     value = "".join(c for c in value if not unicodedata.category(c).startswith("C"))
     value = re.sub(r'[<>:"/\\|?*\s]+', "_", value)
-    return value.strip(" ._")[:limit].rstrip(" ._")
+    value = value.strip(" ._")[:limit].rstrip(" ._")
+    while len(value.encode("utf-8")) > limit * 2:
+        value = value[:-1]
+    return value.rstrip(" ._")
 
 
 def document_basename(facts: Extracted) -> str:
     """Строит вид[_номер][_дата].pdf только из собственных реквизитов документа."""
     classification = facts.classification
-    if classification.is_letter:
+    if classification.document_kind:
+        kind = classification.document_kind
+    elif classification.is_letter:
         kind = {"incoming": "Входящее письмо", "outgoing": "Исходящее письмо"}.get(
             classification.direction, "Письмо"
         )
@@ -31,7 +36,18 @@ def document_basename(facts: Extracted) -> str:
             parts.append(number)
     if facts.requisites.document_date:
         parts.append(facts.requisites.document_date.isoformat())
-    return "_".join(parts) + ".pdf"
+    name = "_".join(parts)
+    reserved = {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{i}" for i in range(1, 10)),
+        *(f"LPT{i}" for i in range(1, 10)),
+    }
+    if name.split(".", 1)[0].upper() in reserved:
+        name = "Документ_" + name
+    return name + ".pdf"
 
 
 def document_filename(index: int, facts: Extracted) -> str:

@@ -66,6 +66,11 @@ async def authenticate(request: Request, key: str | None) -> str | None:
                 "/"
             ) or not hmac.compare_digest(csrf, container.capabilities.csrf(token)):
                 raise IntakeError("csrf_failed", "Origin или CSRF не подтверждён", 403)
+        if owner and token.startswith("v2.") and category != "preview":
+            if not await container.database.renew_session(owner):
+                owner = None
+            else:
+                request.state.renew_session_token = token
     if owner:
         await container.database.throttle(f"{category}:{owner}", limit=limit)
     request.state.auth_owner = owner

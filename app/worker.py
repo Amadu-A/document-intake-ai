@@ -1,5 +1,5 @@
 # app/worker.py
-"""Ограниченный AMQP worker с outbox, recovery, lease heartbeat и часовым reaper."""
+"""Ограниченный AMQP worker с outbox, recovery, lease heartbeat и TTL-очисткой."""
 
 import asyncio
 import contextlib

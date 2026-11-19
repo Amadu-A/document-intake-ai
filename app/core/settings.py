@@ -83,9 +83,9 @@ class Settings(BaseSettings):
     job_timeout_seconds: int = Field(14400, ge=30, le=86400)
     queue_timeout_seconds: int = Field(1800, ge=30, le=14400)
     preview_timeout_seconds: int = Field(3600, ge=30, le=14400)
-    confirmation_timeout_seconds: int = Field(3600, ge=3600, le=3600)
-    retention_seconds: int = Field(3600, ge=3600, le=3600)
-    session_ttl_seconds: int = Field(86400, ge=3600)
+    confirmation_timeout_seconds: int = Field(86400, ge=3600, le=86400)
+    retention_seconds: int = Field(86400, ge=3600, le=86400)
+    session_ttl_seconds: int = Field(259200, ge=3600)
     upload_max_mb: int = Field(1024, ge=1, le=8192)
     upload_max_file_mb: int = Field(400, ge=1, le=400)
     upload_max_file_pages: int = Field(1000, ge=1, le=1000)
@@ -116,6 +116,17 @@ class Settings(BaseSettings):
                 raise ValueError("URL не должен содержать credentials, query или fragment")
         if self.vlm_overlap_pages >= self.vlm_window_pages:
             raise ValueError("Перекрытие должно быть меньше окна VLM")
+        if (
+            self.session_ttl_seconds
+            < self.confirmation_timeout_seconds
+            + self.job_timeout_seconds
+            + self.retention_seconds
+            + self.queue_timeout_seconds
+            + self.preview_timeout_seconds
+        ):
+            raise ValueError(
+                "SESSION_TTL_SECONDS должен покрывать ожидание, обработку и хранение задания"
+            )
         if self.rabbitmq_user in {"guest", "admin", "root"} or self.rabbitmq_vhost == "/":
             raise ValueError("Нужны выделенные RabbitMQ user и vhost")
         for value in (

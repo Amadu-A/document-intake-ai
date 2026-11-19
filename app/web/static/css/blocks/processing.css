@@ -11,7 +11,11 @@
 .mode__radio { flex: none; margin: 2px 0 0; accent-color: var(--color-blue); }
 .mode__default { color: var(--color-blue); font-size: 10px; white-space: nowrap; }
 .processing { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 16px; padding: 19px 21px; margin: 0 0 18px; border: 1px solid #c3d9ff; border-radius: var(--radius); background: var(--color-panel); box-shadow: var(--shadow); }
-.processing__status { font-size: 11px; color: var(--color-muted); }
+.processing__status { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; color: var(--color-text); }
+.processing__status::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: #8798ac; flex: none; }
+.processing--working .processing__status::before { background: #d49c17; }
+.processing--success .processing__status::before { background: #009f84; }
+.processing--error .processing__status::before { background: #c64030; }
 .processing__title { margin: 5px 0; font-size: 18px; }
 .processing__description { margin: 0; font-size: 12px; color: var(--color-muted); overflow-wrap: anywhere; }
 .processing__progress { width: 100%; max-width: 600px; height: 9px; margin-top: 12px; accent-color: var(--color-blue); }

@@ -15,7 +15,7 @@ from time import monotonic
 import httpx
 import pymupdf
 
-from app.domain.schema import BatchResult, OneC, Requisites
+from app.domain.schema import BatchResult
 
 
 def mismatch_paths(checks: list[dict]) -> str:
@@ -80,8 +80,6 @@ def compare_correspondence(
     expected: dict,
     actual: dict,
     organization: str | None,
-    *,
-    unsupported_placeholders: bool = False,
 ) -> list[dict]:
     """Сравнивает факты либо явные заглушки; исторические проверки судебных фактов сохраняются."""
     rows = []
@@ -113,7 +111,7 @@ def compare_correspondence(
         check("pages", pages, document["pages"] if document else None, pages)
         if document is None:
             continue
-        if unsupported_placeholders and not wanted["classification"]["is_letter"]:
+        if not wanted["classification"]["is_letter"]:
             check(
                 "classification.document_root",
                 wanted["classification"]["document_root"],
@@ -133,25 +131,6 @@ def compare_correspondence(
                 bool(document["classification"]["document_kind"]),
                 pages,
             )
-            check(
-                "unsupported_template_warning",
-                True,
-                any("[template_not_supported]" in w for w in document["warnings"]),
-                pages,
-            )
-            check(
-                "requisites.placeholder",
-                Requisites(summary=document["requisites"]["summary"]).model_dump(mode="json"),
-                document["requisites"],
-                pages,
-            )
-            check(
-                "one_c.placeholder",
-                OneC(organization=organization).model_dump(mode="json"),
-                document["one_c"],
-                pages,
-            )
-            continue
         for path in (
             "classification.document_root",
             "classification.is_letter",
@@ -202,7 +181,7 @@ def compare_correspondence(
             check("one_c." + name, None, document["one_c"][name], pages)
         check(
             "one_c.counterparty_from_sender",
-            document["requisites"]["sender"]["name"],
+            document["requisites"]["sender"]["name"] if organization else None,
             document["one_c"]["counterparty"],
             pages,
         )
@@ -412,9 +391,7 @@ async def run_correspondence(
             file["documents"] = [
                 d for d in file["documents"] if d["pages"] in [[2, 3, 4], [5, 6], [7]]
             ]
-        report["checks"] = compare_correspondence(
-            wanted, received, organization, unsupported_placeholders=True
-        )
+        report["checks"] = compare_correspondence(wanted, received, organization)
         actual = [d["pages"] for f in result["files"] for d in f["documents"]]
         expected_ranges = [[1], [2, 3, 4], [5, 6], [7], [8]]
         report["checks"].append(
@@ -428,9 +405,7 @@ async def run_correspondence(
         )
         report["facts_without_separate_golden"] = [[1], [8]]
     else:
-        report["checks"] = compare_correspondence(
-            golden, result, organization, unsupported_placeholders=True
-        )
+        report["checks"] = compare_correspondence(golden, result, organization)
     # Сырой result остаётся только в private отчёте вызывающего runner, без токенов.
     report["documents"] = [
         {

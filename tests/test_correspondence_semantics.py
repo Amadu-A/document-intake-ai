@@ -120,23 +120,24 @@ def test_historical_fine_cannot_be_a_generic_current_debt():
     )
 
 
-def test_current_nonletter_matrix_requires_explicit_placeholder():
-    """Новый live-контракт проверяет заглушку, не принимает выдуманные судебные реквизиты."""
+def test_current_nonletter_matrix_checks_facts_and_rejects_empty_stub():
+    """Матрица проверяет реальные реквизиты неписьма и обнаруживает потерю фактов."""
     wanted = hearing_document()
     actual = copy.deepcopy(wanted)
-    actual["requisites"] = Requisites(summary="Тип определён").model_dump(mode="json")
-    actual["one_c"] = OneC(organization=ORGANIZATION).model_dump(mode="json")
-    actual["warnings"] = ["[template_not_supported] Шаблон пока не реализован"]
 
     def checks():
-        """Сравнивает только явно выбранный текущий контракт заглушки."""
+        """Проверяет полный текущий контракт без прежнего исключения неписем."""
         return compare_correspondence(
             {"files": [{"documents": [wanted]}]},
             {"files": [{"documents": [actual]}]},
             ORGANIZATION,
-            unsupported_placeholders=True,
         )
 
     assert all(row["match"] for row in checks())
+    actual["requisites"] = Requisites(summary="Тип определён").model_dump(mode="json")
+    actual["one_c"] = OneC(organization=ORGANIZATION).model_dump(mode="json")
+    assert any(not row["match"] for row in checks())
     actual["requisites"]["document_number"] = "UNVERIFIED"
-    assert any(row["field"] == "requisites.placeholder" and not row["match"] for row in checks())
+    assert any(
+        row["field"] == "requisites.document_number" and not row["match"] for row in checks()
+    )

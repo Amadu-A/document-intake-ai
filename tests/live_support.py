@@ -307,13 +307,6 @@ async def _documents(
                 expected_status,
                 (artifact.get("processing") or {}).get("status"),
             )
-            if expected_status == "unsupported_template":
-                _row(
-                    rows,
-                    prefix + ".unsupported_template_warning",
-                    True,
-                    any("[template_not_supported]" in w for w in document["warnings"]),
-                )
         await _download_checks(
             client,
             rows,
@@ -419,7 +412,7 @@ async def _run_case(
         if isinstance(actual, str):
             actual = actual[:512]
         elif row["expected"] == [] and isinstance(actual, list):
-            # Матрица заглушек проверяет отсутствие полей, не экспортируя содержимое списков.
+            # Пустые ожидаемые списки сравниваются без публикации приватного содержимого.
             actual = [] if not actual else "NONEMPTY_COLLECTION"
         elif actual is not None and not isinstance(actual, (int, float, bool)):
             actual = "UNSUPPORTED_VALUE"
@@ -463,7 +456,7 @@ async def run_comparison(
                     "kind": "field",
                     "field_path": criterion["path"],
                     "source_page": criterion["page"],
-                    "expected": criterion["expected"],
+                    "expected": criterion.get("expected"),
                     "actual": None,
                     "status": "not_run",
                 }
@@ -471,6 +464,13 @@ async def run_comparison(
             ]
             outcome = {"file": case["file"], "status": "error"}
             try:
+                if any(item.get("expected_from_example") for item in case["checks"]):
+                    path = (examples_dir / case["file"]).with_suffix(".json")
+                    reference = json.loads(await asyncio.to_thread(path.read_text, "utf-8"))
+                    document = reference["files"][0]["documents"][0]
+                    for criterion, row in zip(case["checks"], rows, strict=True):
+                        if criterion.get("expected_from_example"):
+                            row["expected"] = field_value(document, criterion["path"])
                 await _run_case(
                     client, case, examples_dir, headers, job_timeout_seconds, poll_interval, rows
                 )

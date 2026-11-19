@@ -39,13 +39,16 @@ def project_one_c(facts: Extracted, organization: str | None) -> OneC:
         if classification.is_letter and classification.direction
         else []
     )
-    sender = requisites.sender.name
-    if organization and organization_key(sender) == organization_key(organization):
-        sender = None
+    direction = supported_direction(requisites, organization)
+    counterparty = None
+    if direction == classification.direction and direction is not None:
+        counterparty = (
+            requisites.sender.name if direction == "incoming" else requisites.recipient.name
+        )
     summary = " ".join((requisites.summary or "").split()) or None
     return OneC(
         organization=organization,
-        counterparty=sender,
+        counterparty=counterparty,
         view_of_document=path[1] if path else None,
         template_leaf=path[-1] if path else None,
         answer_required=requisites.response_required,

@@ -2,7 +2,7 @@
 /** Редактор с серверным ACK/revision, ограниченным DOM и ленивой загрузкой превью. */
 import { api, notice } from "../api.js";
 import { previewURL, clearPreviews } from "../previews.js";
-import { pageKey, sourceLabel, groupFor, splitRange, mergeRanges, excludePages, createRange, moveBoundary, coversPages, orderedPages, movePages } from "./boundary_state.js";
+import { pageKey, sourceLabel, groupFor, moveBoundary, coversPages, orderedPages, movePages } from "./boundary_state.js";
 import { modeFlags, modeFromFlags } from "./modes.js";
 import { createPageDrag } from "./page_drag.js";
 
@@ -26,7 +26,7 @@ export function createBoundaryEditor(viewer, changed, controlsChanged = () => {}
     stamp: `${snapshot?.job_id}:${saved?.plan_revision}`, pages: physical, key: pageKey,
     selected: physical.filter(p => selected.has(pageKey(p))),
   }), ref => { if (!selected.has(pageKey(ref))) selection(ref); controls(); }, async (chosen, target, side) => {
-    try { await save(movePages(plan, chosen, target, side, physical), "page_move"); }
+    try { await applyMove(chosen, target, side); }
     catch (error) { notice(error.message, true); controls(); }
   }, message => { saveLabel.textContent = message; controls(); });
   function flags() { /** Читает единственное выбранное значение радиогруппы. */ return modeFlags(modes.find(control => control.checked).value); }
@@ -175,6 +175,17 @@ export function createBoundaryEditor(viewer, changed, controlsChanged = () => {}
     if (response && action !== "undo") history.push(before); controls();
     return response;
   }
+  async function edit(action, pages = [], target = null, side = "after") {
+    /** Все законченные действия редактора доступны также headless клиенту через тот же use-case. */
+    const before = structuredClone(saved.draft_plan || plan);
+    const response = await mutate("/segmentation/actions", "POST", { action, pages, target, side });
+    if (response) history.push(before); controls(); return response;
+  }
+  async function applyMove(chosen, target, side) {
+    /** Локальная проверка улучшает feedback; новый порядок вычисляет и сохраняет сервер. */
+    movePages(plan, chosen, target, side, physical);
+    return edit("move", chosen, target, side);
+  }
   function destinationHint() {
     /** Номер в диалоге относится к текущей ленте; исходный адрес и диапазон показываются рядом. */
     const ref = physical[Number(moveTarget.value) - 1], group = ref && groupFor(plan, ref);
@@ -200,7 +211,7 @@ export function createBoundaryEditor(viewer, changed, controlsChanged = () => {}
       const target = physical[Number(moveTarget.value) - 1];
       if (!target) throw new Error("Укажите существующую позицию в ленте");
       const chosen = physical.filter(p => selected.has(pageKey(p)));
-      const response = await save(movePages(plan, chosen, target, document.querySelector("[data-page-move-side]").value, physical), "page_move");
+      const response = await applyMove(chosen, target, document.querySelector("[data-page-move-side]").value);
       if (response && moveDialog.open) moveDialog.close();
       else if (moveDialog.open) { moveError.textContent = errorLabel.textContent || "Перенос не сохранён. Проверьте соединение и текущую редакцию."; moveError.hidden = false; }
     } catch (error) { moveError.textContent = error.message; moveError.hidden = false; }
@@ -216,20 +227,20 @@ export function createBoundaryEditor(viewer, changed, controlsChanged = () => {}
     if (!plan || busy) return;
     const chosen = physical.filter(p => selected.has(pageKey(p))), ref = chosen[0] || physical[0], action = button.dataset.boundaryAction;
     try {
-      if (action === "manual") await save(plan, "manual");
+      if (action === "manual") await edit("manual");
       if (action === "page-move") openMove();
       if (["page-back", "page-forward"].includes(action)) {
         const at = physical.findIndex(p => pageKey(p) === pageKey(action === "page-back" ? chosen[0] : chosen.at(-1)));
         const target = physical[at + (action === "page-back" ? -1 : 1)];
         if (!target) throw new Error("Страница уже находится у края пакета");
-        await save(movePages(plan, chosen, target, action === "page-back" ? "before" : "after", physical), "page_move");
+        await applyMove(chosen, target, action === "page-back" ? "before" : "after");
       }
-      if (action === "split") await save(splitRange(plan, ref, physical), "split");
-      if (action === "merge") await save(mergeRanges(plan, ref, physical), "merge");
-      if (action === "exclude" && chosen.length && window.confirm(`Исключить ${chosen.length} стр. из регистрационных PDF? Оригиналы и превью сохранятся. Пустота страниц автоматически не определялась.`)) await save(excludePages(plan, chosen), "exclude");
-      if (action === "create") await save(createRange(plan, chosen, physical), "restore");
+      if (action === "split") await edit("split", [ref]);
+      if (action === "merge") await edit("merge", [ref]);
+      if (action === "exclude" && chosen.length && window.confirm(`Исключить ${chosen.length} стр. из регистрационных PDF? Оригиналы и превью сохранятся. Пустота страниц автоматически не определялась.`)) await edit("exclude", chosen);
+      if (action === "create") await edit("create", chosen);
       if (action === "undo" && history.length) { const previous = history.at(-1), response = await mutate("/segmentation", "PUT", { ...previous, action: "undo" }); if (response) history.pop(); }
-      if (action === "reset" && window.confirm("Восстановить первоначальный состав?")) await save(saved.initial_plan, "reset");
+      if (action === "reset" && window.confirm("Восстановить первоначальный состав?")) await edit("reset");
     } catch (error) { notice(error.message, true); }
   }));
   confirm.addEventListener("click", () => mutate("/segmentation/confirm", "POST", {}));

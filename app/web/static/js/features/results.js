@@ -1,7 +1,7 @@
 // app/web/static/js/features/results.js
 /** Карточки VLM-плана, реквизиты и журнал без вставки недоверенного HTML. */
 import { sourceLabel } from "./boundary_state.js";
-const processingLabels = { recognized: "Реквизиты письма извлечены", unsupported_template: "Тип определён · шаблон реквизитов пока не реализован", classification_failed: "Тип не подтверждён · PDF сохранён", extraction_failed: "Реквизиты не подтверждены · PDF сохранён" };
+const processingLabels = { recognized: "Реквизиты извлечены", unsupported_template: "Ранний результат без шаблона", classification_failed: "Тип не подтверждён · PDF сохранён", extraction_failed: "Реквизиты не подтверждены · PDF сохранён" };
 export function renderPlan(snapshot, viewer) {
   /** Показывает регистрационные группы и приложения исключительно для просмотра. */
   const target = document.querySelector("[data-documents]"); target.replaceChildren();
@@ -43,7 +43,7 @@ export function renderPlan(snapshot, viewer) {
     `${documents.length} ${segmentation?.locked ? "регистрационных документов" : "диапазонов черновика"} · ${count} приложений · ${segmentation?.locked ? "состав заблокирован" : "черновик состава"}${documents.length > 60 ? " · показаны первые 60, остальные доступны через ленту" : ""}` : "Здесь появится состав документов";
 }
 
-export function renderFacts(result, processing = {}) {
+export function renderFacts(result, processing = {}, detailed = null, viewer = null) {
   /** Формирует доступное текстовое представление подтверждённых реквизитов и warnings. */
   const target = document.querySelector("[data-facts]"); target.replaceChildren();
   const warnings = document.querySelector("[data-warnings]"); warnings.replaceChildren();
@@ -59,6 +59,7 @@ export function renderFacts(result, processing = {}) {
     for (const [label, value] of Object.entries({
       "Номер": doc.requisites.document_number, "Дата": doc.requisites.document_date,
       "Отправитель": doc.requisites.sender.name, "Адресат": doc.requisites.recipient.name,
+      "Фактический вид": doc.classification.document_kind,
       "Классификация": (doc.classification.template_path.length ? doc.classification.template_path : [doc.classification.document_root, doc.classification.document_kind, doc.classification.document_subkind].filter(Boolean)).join(" → "),
       "Содержание": doc.requisites.summary,
     })) {
@@ -67,6 +68,26 @@ export function renderFacts(result, processing = {}) {
     }
     const link = document.createElement("a"); link.href = doc.attachment_file.file_url; link.textContent = "↓ PDF-комплект для 1С";
     target.append(list, link);
+    const extended = detailed?.documents.find(item => item.document_id === doc.document_id);
+    if (extended) {
+      const category = document.createElement("p"); category.textContent = extended.kind_name ? "Категория: " + extended.kind_name : "Категория не установлена · общие реквизиты"; target.append(category);
+      const labels = {primary_document_type:"Фактический вид",primary_document_role:"Назначение",parent_contract:"Договор-основание",total_amount:"Общая сумма",vat_amount:"НДС",currency:"Валюта",payment_purpose:"Назначение платежа",payment_terms:"Условия оплаты",bank_details:"Банковские реквизиты",court_name:"Суд",court_case_number:"Номер дела",issue_date:"Дата выдачи",claimant:"Взыскатель",debtor:"Должник",enforcement_subject:"Предмет взыскания",contract_subject:"Предмет договора",our_role:"Наша роль",valid_from:"Начало действия",valid_until:"Окончание действия",service_subject:"Предмет обслуживания",change_subject:"Предмет изменения",effective_date:"Дата вступления",disputed_terms:"Разногласия",attachment_subject:"Содержание приложения"};
+      const roles = {primary:"Подтверждение исполнения",tax:"Налоговый документ",payment_request:"Запрос платежа",reconciliation:"Сверка"};
+      const fields = document.createElement("dl");
+      for (const [key, value] of Object.entries(extended.details || {})) {
+        if (key === "profile") continue;
+        const term = document.createElement("dt"), definition = document.createElement("dd"); term.textContent = labels[key] || "Реквизит";
+        definition.textContent = value == null ? "Не установлено" : key === "primary_document_role" ? roles[value] || value : typeof value === "object" ? Object.values(value).filter(v => v != null).join(" · ") || "Не установлено" : String(value); fields.append(term, definition);
+      }
+      target.append(fields);
+      for (const [path, records] of Object.entries(extended.field_evidence)) for (const record of records) {
+        if (!viewer) continue;
+        const evidence = document.createElement("button"); evidence.type = "button"; evidence.className = "button button--compact";
+        const field = path.split('.').at(-1), label = labels[field] || ({document_number:"Номер",document_date:"Дата",document_kind:"Вид",name:"Организация",summary:"Содержание"})[field] || "Подтверждение";
+        evidence.textContent = `${label} · исходная стр. ${record.page_number}`; evidence.title = record.raw || "Свидетельство чтения";
+        evidence.addEventListener("click", () => viewer.select({ file_id: record.file_id, page_number: record.page_number })); target.append(evidence);
+      }
+    }
     doc.warnings.forEach(text => { const item = document.createElement("li"); item.textContent = text; warnings.append(item); });
   }));
 }

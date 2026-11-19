@@ -9,6 +9,7 @@ import shutil
 import sys
 import tempfile
 import zipfile
+from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
 from uuid import UUID, uuid4
@@ -300,7 +301,8 @@ class FileStorage:
         """Кеширует ZIP атомарно; потоки и отмена не оставляют доступного неполного архива."""
         identity = hashlib.sha256(
             json.dumps(
-                [(d["file_name"], d["sha256"]) for d in documents], ensure_ascii=False
+                ["archive-folders-time-v2", [(d["file_name"], d["sha256"]) for d in documents]],
+                ensure_ascii=False,
             ).encode()
         ).hexdigest()
         directory = self.directory(job.id)
@@ -331,9 +333,20 @@ class FileStorage:
                                     "artifact_not_found", "PDF-комплект недоступен", 404
                                 )
                             digest, size = hashlib.sha256(), 0
+                            created = datetime.now(UTC)
+                            date_time = (
+                                max(1980, min(2107, created.year)),
+                                created.month,
+                                created.day,
+                                created.hour,
+                                created.minute,
+                                created.second,
+                            )
+                            info = zipfile.ZipInfo(item["file_name"], date_time=date_time)
+                            info.external_attr = 0o600 << 16
                             with (
                                 source.open("rb") as stream,
-                                archive.open(item["file_name"], "w", force_zip64=True) as target,
+                                archive.open(info, "w", force_zip64=True) as target,
                             ):
                                 while chunk := stream.read(256 * 1024):
                                     alive()

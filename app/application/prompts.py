@@ -14,20 +14,27 @@ class Prompts:
     def __init__(self, repository: PromptRepository, directory: Path) -> None:
         """Подключает repository и каталог утверждённых промптов при сборке приложения."""
         self.repository = repository
-        self.versions = {"segmentation": "v4", "extraction": "v5"}
+        self.versions = {"segmentation": "v5", "extraction": "v6"}
         self.base = {
             stage: (directory / f"{stage}-{self.versions[stage]}.txt").read_text("utf-8")
             for stage in ("segmentation", "extraction")
         }
-        self.previous_extraction = (directory / "extraction-v4.txt").read_text("utf-8")
+        self.previous_extractions = {
+            (directory / f"extraction-{version}.txt").read_text("utf-8") for version in ("v4", "v5")
+        }
+        self.previous_segmentation = (directory / "segmentation-v4.txt").read_text("utf-8")
 
     async def get(self, owner: str) -> dict:
         """Возвращает оба текста и стабильные хеши базовых версий."""
         saved = await self.repository.get_prompts(owner)
         values = {key: (saved or {}).get(key, text) for key, text in self.base.items()}
-        if not saved or saved.get("_segmentation_version") != self.versions["segmentation"]:
+        if (
+            not saved
+            or saved.get("_segmentation_version") not in {"v4", "v5"}
+            or saved.get("segmentation") == self.previous_segmentation
+        ):
             values["segmentation"] = self.base["segmentation"]
-        if values["extraction"] == self.previous_extraction:
+        if values["extraction"] in self.previous_extractions:
             values["extraction"] = self.base["extraction"]
         return {
             "prompts": values,

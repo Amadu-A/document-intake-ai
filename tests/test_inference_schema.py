@@ -16,6 +16,23 @@ from app.domain.taxonomy import LETTER_PATHS
 from tests.support import facts, fixed_group
 
 
+def test_alternative_letter_paths_are_closed_and_nonletters_have_no_letter_alternatives():
+    """Реестр договоров не может попасть в поле альтернативных шаблонов писем."""
+    schema = extraction_schema(None)
+    allowed = schema["$defs"]["Alternative"]["properties"]["template_path"]["enum"]
+    assert {tuple(path) for path in allowed} == {(), *LETTER_PATHS}
+    nonletter = schema["$defs"]["Classification"]["anyOf"][1]
+    assert nonletter["properties"]["alternatives"]["maxItems"] == 0
+
+
+def test_primary_evidence_schema_requires_visual_source_and_both_field_statuses():
+    """Физическое чтение собственного номера/даты ограничено в самой схеме VLM."""
+    schema = extraction_schema(None, detailed=True)
+    assert schema["$defs"]["PrimaryEvidence"]["properties"]["source"] == {"const": "image"}
+    evidence = schema["properties"]["field_evidence"]
+    assert set(evidence["required"]) == {"requisites.document_number", "requisites.document_date"}
+
+
 def test_public_json_10_schema_keeps_versioned_contract():
     """Внутренние свидетельства не добавляют поля и не меняют типы утверждённого экспорта."""
     assert BatchResult.model_json_schema() == json.loads(
@@ -49,11 +66,8 @@ def test_letter_schema_uses_only_catalog_and_nonletter_keeps_preliminary_kind():
     properties = letter["properties"]
     assert properties["is_letter"]["const"] is True
     assert properties["document_root"]["const"] == DocumentRoot.LETTER.value
-    assert set(properties["document_kind"]["enum"]) == {None, *(p[2] for p in LETTER_PATHS)}
-    assert set(properties["document_subkind"]["enum"]) == {
-        None,
-        *(p[3] for p in LETTER_PATHS if len(p) == 4),
-    }
+    assert "enum" not in properties["document_kind"]
+    assert "enum" not in properties["document_subkind"]
     assert "anyOf" in properties["direction"]
     assert "maxItems" not in properties["template_path"]
     assert other["properties"]["is_letter"]["const"] is False
@@ -114,7 +128,9 @@ async def test_all_extraction_requests_use_context_schema(container, page_count)
     result = await container.analysis._extract(job, group, pages, emit)
     assert result.classification.direction is None
     assert len(container.vision.calls) == request_count
-    assert all(call["schema"] == extraction_schema(None) for call in container.vision.calls)
+    assert all(
+        call["schema"] == extraction_schema(None, detailed=True) for call in container.vision.calls
+    )
 
 
 async def test_schema_override_does_not_bypass_python_validation(container):

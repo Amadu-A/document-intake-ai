@@ -1,22 +1,28 @@
 # app/application/document_processing.py
-"""Классификация каждого блока перед шаблоном письма; неписьма и отказы не теряют пакет."""
+"""Классификация каждого блока перед профильным извлечением; отказы не теряют пакет."""
 
 import json
 from collections.abc import Awaitable, Callable
 
+from app.application.extraction_validation import validate_selection
 from app.application.inference_schema import classification_schema
 from app.application.one_c_projection import canonical_organization
 from app.application.ports import AnalysisSettings, Emit
 from app.application.related_dates import ValidatedRequest
 from app.domain.boundaries import FixedGroup
+from app.domain.document_kinds import catalog_json
 from app.domain.document_processing import MAX_VLM_PAGES, DocumentClassification, DocumentProcessing
 from app.domain.errors import IntakeError, LeaseLost
+from app.domain.extractions import DetailedFacts, Evidence
 from app.domain.jobs import Job
-from app.domain.schema import Classification, Extracted, OneC, Recognition, Requisites
+from app.domain.schema import Classification, OneC, Recognition, Requisites
 from app.domain.segmentation import windows
 from app.domain.taxonomy import taxonomy_json
 
-Extract = Callable[[Job, FixedGroup, list[dict], Emit, Classification], Awaitable[Extracted]]
+Extract = Callable[
+    [Job, FixedGroup, list[dict], Emit, Classification, DocumentClassification],
+    Awaitable[DetailedFacts],
+]
 
 
 def part_context(job: Job, group: FixedGroup, index: int, count: int) -> dict:
@@ -31,11 +37,11 @@ def part_context(job: Job, group: FixedGroup, index: int, count: int) -> dict:
     }
 
 
-def placeholder(
+def incomplete_facts(
     classification: Classification | None, summary: str | None, code: str, message: str
-) -> Extracted:
-    """Сохраняет известный тип и PDF, явно оставляя неподдерживаемые/непроверенные поля пустыми."""
-    return Extracted(
+) -> DetailedFacts:
+    """Изолирует отказ блока: известный тип/PDF сохраняются, непроверенные факты пусты."""
+    return DetailedFacts(
         classification=classification
         or Classification(
             document_root=None,
@@ -44,15 +50,11 @@ def placeholder(
             template_path=[],
             document_kind=None,
         ),
-        requisites=Requisites(summary=summary),
+        requisites=Requisites(summary=summary).model_dump(),
         one_c=OneC(),
         recognition=Recognition(
             low_confidence_fields=(
-                []
-                if code == "template_not_supported"
-                else ["requisites"]
-                if classification
-                else ["classification", "requisites"]
+                ["requisites"] if classification else ["classification", "requisites"]
             )
         ),
         warnings=[f"[{code}] {message}"],
@@ -68,7 +70,7 @@ class ProcessDocument:
 
     async def run(
         self, job: Job, group: FixedGroup, pages: list[dict], extract: Extract, emit: Emit
-    ) -> tuple[Extracted, DocumentProcessing]:
+    ) -> tuple[DetailedFacts, DocumentProcessing]:
         """Изолирует отказ одного блока; утрата lease и отмена продолжают прерывать worker."""
         chunks = windows(pages, min(MAX_VLM_PAGES, self.settings.vlm_window_pages))
         processing = DocumentProcessing(
@@ -86,12 +88,8 @@ class ProcessDocument:
                 await emit("document_processing", processing.model_dump(mode="json"))
 
                 def validate(value: DocumentClassification) -> None:
-                    """Не позволяет определить направление без обслуживаемой организации."""
-                    if not job.organization_hint and value.classification.direction is not None:
-                        raise IntakeError(
-                            "schema_validation_failed",
-                            "Без организации направление должно быть null",
-                        )
+                    """Проверяет профиль и роль относительно доверенного контекста организации."""
+                    validate_selection(value, job.organization_hint, pages)
 
                 result = await self.request(
                     job.prompts["extraction"] + "\nТЕКУЩИЙ ЭТАП — только классификация блока. "
@@ -101,6 +99,7 @@ class ProcessDocument:
                         "part": part_context(job, group, index, len(chunks)),
                         "organization_hint": canonical_organization(job.organization_hint),
                         "catalog": json.loads(taxonomy_json()),
+                        "document_kinds": json.loads(catalog_json()),
                         "previous_part": previous,
                         "pages": [
                             {"file_id": p["file_id"], "page_number": p["page_number"]}
@@ -126,46 +125,51 @@ class ProcessDocument:
                 previous = result.model_dump(mode="json")
                 processing.parts_completed = index
             if classification.document_root is None:
-                raise IntakeError(
-                    "document_type_unresolved", "Род документа не установлен по источнику"
+                warnings.append("Род документа не установлен; извлекаются общие реквизиты")
+            processing.stage, processing.parts_completed = "extraction", 0
+            processing.parts_total = len(
+                windows(
+                    pages,
+                    min(MAX_VLM_PAGES, self.settings.vlm_window_pages),
+                    min(
+                        self.settings.vlm_overlap_pages,
+                        min(MAX_VLM_PAGES, self.settings.vlm_window_pages) - 1,
+                    ),
                 )
-            if not classification.is_letter:
-                processing.status, processing.code = (
-                    "unsupported_template",
-                    "template_not_supported",
-                )
-                facts = placeholder(
-                    classification,
-                    summary,
-                    processing.code,
-                    "Тип документа определён. Шаблон реквизитов пока не реализован; "
-                    "доступен PDF-комплект.",
-                )
-            else:
-                processing.stage, processing.parts_completed = "extraction", 0
-                processing.parts_total = len(
-                    windows(
-                        pages,
-                        min(MAX_VLM_PAGES, self.settings.vlm_window_pages),
-                        min(
-                            self.settings.vlm_overlap_pages,
-                            min(MAX_VLM_PAGES, self.settings.vlm_window_pages) - 1,
-                        ),
+            )
+            await emit("document_processing", processing.model_dump(mode="json"))
+
+            async def extraction_emit(kind: str, data: dict) -> None:
+                """Считает прочитанные части без выдачи промежуточных фактов."""
+                if kind == "document_part_completed":
+                    processing.parts_completed = data["part_index"]
+                    processing.parts_total = data["parts_total"]
+                    await emit("document_processing", processing.model_dump(mode="json"))
+                else:
+                    await emit(kind, data)
+
+            facts = await extract(job, group, pages, extraction_emit, classification, result)
+            if (
+                result.kind_code in {"D04", "D05", "D06", "D07", "D08"}
+                and result.role_evidence
+                and result.role_source_page
+            ):
+                facts.field_evidence.setdefault("classification.document_root", []).append(
+                    Evidence(
+                        **result.role_source_page.model_dump(),
+                        raw=result.role_evidence,
+                        status="found",
+                        source="image",
+                        confidence=None,
                     )
                 )
-                await emit("document_processing", processing.model_dump(mode="json"))
-
-                async def extraction_emit(kind: str, data: dict) -> None:
-                    """Считает прочитанные части без выдачи промежуточных фактов."""
-                    if kind == "document_part_completed":
-                        processing.parts_completed = data["part_index"]
-                        processing.parts_total = data["parts_total"]
-                        await emit("document_processing", processing.model_dump(mode="json"))
-                    else:
-                        await emit(kind, data)
-
-                facts = await extract(job, group, pages, extraction_emit, classification)
-                processing.status, processing.parts_completed = "recognized", processing.parts_total
+            processing.status, processing.parts_completed = "recognized", processing.parts_total
+            if result.kind_code is None and not (
+                classification.is_letter
+                and classification.direction == "outgoing"
+                and classification.template_path
+            ):
+                facts.warnings.append("Категория Dxx не установлена; извлечены общие реквизиты")
             facts.warnings = list(dict.fromkeys([*facts.warnings, *warnings]))
         except LeaseLost:
             raise
@@ -178,7 +182,7 @@ class ProcessDocument:
                 else "extraction_failed"
             )
             processing.code = error.code
-            facts = placeholder(
+            facts = incomplete_facts(
                 classification,
                 summary,
                 processing.status,

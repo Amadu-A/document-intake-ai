@@ -1,0 +1,9 @@
+<!-- app/web/templates/components/history.html -->
+<!-- История берётся только из owner API; смена просмотра не отменяет worker другого задания. -->
+<dialog class="modal history" data-history aria-labelledby="history-title">
+  <div class="modal__heading"><h2 class="modal__title" id="history-title">Мои задания</h2><button class="button" type="button" data-history-close aria-label="Закрыть список заданий">✕</button></div>
+  <p class="modal__description">Доступны в этом браузере при сохранённой сессии. Закрытие вкладки не останавливает обработку.</p>
+  <p data-history-status role="status" aria-live="polite"></p>
+  <ul class="history__list" data-history-list></ul>
+  <button class="button" type="button" data-history-more hidden>Ещё задания</button>
+</dialog>

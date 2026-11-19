@@ -167,9 +167,9 @@ async def test_skip_is_headless_one_registration_per_source_without_segmentation
     assert all(c["schema"]["title"] != "PairAnswer" for c in container.vision.calls)
     assert [c["schema"]["title"] for c in container.vision.calls] == [
         "DocumentClassification",
-        "ExtractionDraft",
+        "DetailedExtraction",
         "DocumentClassification",
-        "ExtractionDraft",
+        "DetailedExtraction",
     ]
     job = await container.database.get(data["job_id"])
     assert not job.comparisons and container.exports.comparisons(job)["total"] == 0

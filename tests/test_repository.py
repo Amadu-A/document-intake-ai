@@ -53,7 +53,9 @@ async def test_cancel_fences_running_worker(container):
     running = await container.database.claim(job.id)
     cancelled = await container.database.cancel(job.id, job.owner)
     assert cancelled.status == "cancelled"
-    assert cancelled.expires_at == cancelled.completed_at + timedelta(hours=1)
+    assert cancelled.expires_at == cancelled.completed_at + timedelta(
+        seconds=container.settings.retention_seconds
+    )
     assert not await container.database.heartbeat(job.id, running.fence)
     with pytest.raises(LeaseLost):
         await container.database.checkpoint(
@@ -73,7 +75,9 @@ async def test_deadline_is_separate_from_retention(container):
     failed = await container.database.get(job.id)
     assert failed.status == "failed"
     assert failed.error["code"] == "job_timeout"
-    assert failed.expires_at == failed.completed_at + timedelta(hours=1)
+    assert failed.expires_at == failed.completed_at + timedelta(
+        seconds=container.settings.retention_seconds
+    )
 
 
 async def test_reaper_does_not_select_active_jobs(container):

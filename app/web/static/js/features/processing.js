@@ -33,7 +33,7 @@ export function renderProcessing(data, { uploading = false, cancelling = false, 
     const supported = documents.filter(p => p.status === "recognized").length;
     const unsupported = documents.filter(p => p.status === "unsupported_template").length;
     const incomplete = documents.filter(p => ["classification_failed", "extraction_failed"].includes(p.status)).length;
-    description = `Распознано писем: ${supported}. Без шаблона: ${unsupported}. Требуют проверки: ${incomplete}. PDF всех блоков готовы.`;
+    description = `Распознано документов: ${supported}. Требуют проверки: ${incomplete + unsupported}. PDF всех блоков готовы.`;
   }
   if (status === "failed" || error || unavailable) { title = "Не удалось завершить обработку"; description = data?.error?.message || error || "Задание недоступно. Создайте новый пакет."; counter = null; }
   if (cancelling) { title = "Отменяем обработку"; description = "Ожидаем подтверждения остановки"; counter = null; }
@@ -48,8 +48,11 @@ export function renderProcessing(data, { uploading = false, cancelling = false, 
   else progress.removeAttribute("value");
   get("[data-processing-title]").textContent = title;
   get("[data-processing-description]").textContent = description;
-  get("[data-processing-status]").textContent = cancelling ? "Остановка задания" : error ? "Ошибка" : statusNames[status] || "Анализ не запущен";
+  const caption = uploading ? "Загружаем" : cancelling ? "Остановка задания" : status === "failed" || error ? "Ошибка" : status === "cancelled" ? "Отменено" : success ? "Результат готов" : review || ready && manual ? "Требуется подтверждение" : ready ? "Готово к анализу" : data && !data.preview_complete ? "Подготавливаем" : status === "running" ? ({ocr:"Распознаём",boundaries:"Проверяем границы",extraction:"Извлекаем"}[active] || "Обрабатываем") : statusNames[status] || "Анализ не запущен";
+  get("[data-processing-status]").textContent = caption;
   get("[data-processing]").classList.toggle("processing--error", status === "failed" || !!error);
+  get("[data-processing]").classList.toggle("processing--success", !error && (success || ready && !manual));
+  get("[data-processing]").classList.toggle("processing--working", !error && !success && status !== "failed" && status !== "cancelled" && !!(data || uploading));
   const start = get("[data-start]"); start.hidden = !ready || confirmVisible || cancelling || unavailable;
   start.disabled = !ready || pending || starting || cancelling || unavailable;
   const confirm = get("[data-confirm-plan]"); confirm.hidden = !confirmVisible || cancelling || unavailable;
@@ -68,12 +71,13 @@ export function renderProcessing(data, { uploading = false, cancelling = false, 
   };
   for (const [step, name] of Object.entries(names)) {
     const node = get(`[data-processing-step="${step}"]`);
-    const skipped = step === "boundaries" && mode.skip_segmentation || step === "confirmation" && data?.plan_locked && (mode.auto_split && !data.comparisons?.needs_review || mode.skip_segmentation && !manual);
+    const wasCompared = !!data?.comparisons?.total || !!segmentation.proposed_plan;
+    const skipped = step === "boundaries" && mode.skip_segmentation && !wasCompared || step === "confirmation" && data?.plan_locked && (mode.auto_split && !data.comparisons?.needs_review || mode.skip_segmentation && !manual);
     const failed = status === "failed" && step === active;
     const uncertain = step === "boundaries" && data?.comparisons?.needs_review;
     const state = failed ? "error" : skipped ? "skipped" : uncertain ? "review" : completed[step] ? "done" : step === current ? "active" : "pending";
     node.className = "processing__step" + (state === "pending" ? "" : ` processing__step--${state}`);
-    node.textContent = `${state === "done" ? "✓ " : state === "error" ? "! " : ""}${name}${state === "skipped" ? " · пропущено" : uncertain ? " · требуется проверка" : ""}`;
+    node.textContent = `${state === "done" ? "✓ " : state === "error" ? "! " : ""}${name}${step === "boundaries" && wasCompared && segmentation.segmentation_source === "manual_override" ? " · Скорректировано вручную" : state === "skipped" ? " · пропущено" : uncertain ? " · требуется проверка" : ""}`;
     if (state === "active") node.setAttribute("aria-current", "step"); else node.removeAttribute("aria-current");
   }
 }

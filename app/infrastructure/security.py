@@ -22,9 +22,16 @@ class Capabilities:
         return hmac.new(secret.encode(), value.encode(), hashlib.sha256).hexdigest()
 
     def new_session(self) -> str:
-        """Создаёт случайную подписанную сессию с абсолютным временем истечения."""
-        expires = int(utcnow().timestamp()) + self.settings.session_ttl_seconds
-        value = f"{secrets.token_urlsafe(32)}.{expires}"
+        """Создаёт стабильную signed identity v2; sliding срок проверяется в серверной сессии."""
+        value = "v2." + secrets.token_hex(32)
+        return value + "." + self._mac(self.settings.session_secret.get_secret_value(), value)
+
+    def renew_session(self, token: str) -> str:
+        """Обновляет старый формат на root GET без смены owner и потери заданий/промптов."""
+        owner = self.session_owner(token)
+        if not owner:
+            return self.new_session()
+        value = "v2." + owner.removeprefix("session:")
         return value + "." + self._mac(self.settings.session_secret.get_secret_value(), value)
 
     def session_owner(self, token: str | None) -> str | None:
@@ -32,6 +39,18 @@ class Capabilities:
         if not token or len(token) > 200:
             return None
         try:
+            if token.startswith("v2."):
+                prefix, identity, signature = token.split(".")
+                expected = self._mac(
+                    self.settings.session_secret.get_secret_value(), prefix + "." + identity
+                )
+                if (
+                    len(identity) != 64
+                    or any(c not in "0123456789abcdef" for c in identity)
+                    or not hmac.compare_digest(expected, signature)
+                ):
+                    return None
+                return "session:" + identity
             random, expires, signature = token.split(".")
             value = random + "." + expires
             expected = self._mac(self.settings.session_secret.get_secret_value(), value)

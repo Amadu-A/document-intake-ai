@@ -115,6 +115,12 @@ class Intake:
             raise IntakeError("result_not_ready", "Проверенный результат недоступен", 409)
         return job.result
 
+    async def list_jobs(self, owner: str, offset: int = 0, limit: int = 20) -> list[Job]:
+        """Возвращает собственную историю; paging проверяется независимо от HTTP."""
+        if offset < 0 or not 1 <= limit <= 100:
+            raise IntakeError("invalid_pagination", "Некорректная пагинация")
+        return await self.repository.list_jobs(owner, offset, limit)
+
     @timed("cancel_analysis")
     async def cancel(self, job_id: str, owner: str) -> Job:
         """Отменяет задание через общий порт с атомарной проверкой owner, TTL и fence."""

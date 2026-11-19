@@ -45,17 +45,20 @@ async def batch(client, container, count=4):
     return identifier
 
 
-async def test_mixed_batch_keeps_valid_letters_placeholders_and_every_pdf(client, container):
-    """Отказ одного блока сохраняет остальные; неписьмо получает явную заглушку."""
+async def test_mixed_batch_keeps_valid_documents_and_every_pdf(client, container):
+    """Отказ одного блока сохраняет остальные, включая общие реквизиты неписьма."""
     identifier = await batch(client, container)
     first, last = facts(), facts()
     first["requisites"]["document_number"] = "PRIVATE_VALID_FIRST"
     last["requisites"]["document_number"] = "PRIVATE_VALID_LAST"
+    nonletter = facts()
+    nonletter["classification"] = classification(False)["classification"]
     container.vision.answers.extend(
         [
             classification(),
             first,
             classification(False),
+            nonletter,
             classification(),
             *[
                 {"requisites": {"document_number": "PRIVATE_INVALID"}}
@@ -72,7 +75,7 @@ async def test_mixed_batch_keeps_valid_letters_placeholders_and_every_pdf(client
     processing = [a["processing"] for a in status["artifacts"]]
     assert [p["status"] for p in processing] == [
         "recognized",
-        "unsupported_template",
+        "recognized",
         "extraction_failed",
         "recognized",
     ]
@@ -135,6 +138,7 @@ async def test_restart_reuses_completed_block_checkpoints(client, container):
         == 3
     )
     assert (
-        len([c for c in container.vision.calls if c["schema"]["title"] == "ExtractionDraft"]) == 3
+        len([c for c in container.vision.calls if c["schema"]["title"] == "DetailedExtraction"])
+        == 3
     )
     assert [d["pages"] for d in final.result["files"][0]["documents"]] == [[1], [2], [3]]

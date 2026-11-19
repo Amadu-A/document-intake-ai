@@ -60,7 +60,7 @@ async def test_primary_date_ignores_attachment_ocr_and_is_revalidated_on_full_an
     assert "UNTRUSTED_OCR_DATE" not in str(primary["context"])
     for call in (full, retry):
         assert (
-            call["schema"]["$defs"]["Requisites"]["properties"]["document_date"]["const"]
+            call["schema"]["$defs"]["DetailedRequisites"]["properties"]["document_date"]["const"]
             == "2031-01-12"
         )
     assert retry["context"]["validation_errors"]
@@ -85,7 +85,7 @@ async def test_unreadable_primary_date_stays_null_without_guessing(container, st
     result = await container.analysis._extract(job(container), group, pages, emit)
     assert result.requisites.document_date is None
     assert all(warning in result.warnings for warning in independent["warnings"])
-    assert container.vision.calls[-1]["schema"]["$defs"]["Requisites"]["properties"][
+    assert container.vision.calls[-1]["schema"]["$defs"]["DetailedRequisites"]["properties"][
         "document_date"
     ] == {"type": "null"}
 
@@ -114,5 +114,5 @@ async def test_invalid_independent_date_evidence_requires_vlm_retry(container, p
     assert [c["schema"]["title"] for c in container.vision.calls] == [
         "PrimaryDateReading",
         "PrimaryDateReading",
-        "ExtractionDraft",
+        "DetailedExtraction",
     ]

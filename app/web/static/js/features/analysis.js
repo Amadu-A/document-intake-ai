@@ -6,6 +6,7 @@ import { renderPlan, renderFacts, journal } from "./results.js";
 import { createBoundaryEditor } from "./boundaries.js";
 import { renderProcessing } from "./processing.js";
 import { createArchive } from "./archive.js";
+import { initializeHistory } from "./history.js";
 
 const terminal = new Set(["completed", "completed_with_warnings", "failed", "cancelled"]);
 const labels = { uploaded: "Загружено", queued: "В очереди", running: "Обработка", awaiting_confirmation: "Ожидает проверки состава", completed: "Завершено", completed_with_warnings: "Завершено с предупреждениями", failed: "Ошибка", cancelled: "Отменено" };
@@ -15,7 +16,7 @@ export function initializeAnalysis(viewer) {
   let jobId = sessionStorage.getItem("intake_job"), snapshot = null, confirmed = null;
   let source = null, cursor = 0, pollTimer = null, refreshTimer = null, raw = "";
   let generation = 0, fetching = null, stopped = false, uploading = false, cancelling = false, exported = false;
-  let starting = false, transportError = null;
+  let starting = false, transportError = null, cancelError = null;
   let archive = null;
   let reads = new AbortController();
   const get = selector => document.querySelector(selector);
@@ -32,6 +33,14 @@ export function initializeAnalysis(viewer) {
     archive?.update(snapshot, boundaries.pending() || uploading || cancelling || stopped);
   }
   const current = (own, id) => own === generation && id === jobId;
+  initializeHistory(async id => {
+    /** Смена просмотра отсоединяет UI, сохраняя обработку и разметку прежнего задания на сервере. */
+    if (uploading || cancelling || starting || boundaries.pending()) { notice("Дождитесь завершения текущей команды", true); return false; }
+    reset(); jobId = id; sessionStorage.setItem("intake_job", id);
+    const own = generation; await refresh();
+    if (current(own, id) && !stopped && snapshot && !terminal.has(snapshot.status)) { connect(); poll(); }
+    return current(own, id) && !stopped;
+  });
   function close() {
     /** Отзывает чтения, SSE, таймеры и декодирование превью старого поколения. */
     source?.close(); source = null; clearTimeout(pollTimer); clearTimeout(refreshTimer);
@@ -40,7 +49,7 @@ export function initializeAnalysis(viewer) {
   function reset() {
     /** Полностью освобождает пакет без перезагрузки страницы. */
     generation++; close(); archive.reset(); jobId = null; snapshot = confirmed = null; cursor = 0; raw = "";
-    fetching = null; stopped = uploading = cancelling = exported = starting = false; transportError = null;
+    fetching = null; stopped = uploading = cancelling = exported = starting = false; transportError = cancelError = null;
     sessionStorage.removeItem("intake_job"); input.value = ""; input.disabled = false;
     organization.value = ""; organization.disabled = false; start.disabled = true;
     get("[data-cancel]").hidden = true; get("[data-cancel]").disabled = false;
@@ -57,7 +66,7 @@ export function initializeAnalysis(viewer) {
     /** Проверка поколения повторяется после каждого сетевого ожидания. */
     if (!current(own, data.job_id)) return false;
     const previousStatus = snapshot?.status, previousPairs = snapshot?.comparisons?.completed, previousLocked = snapshot?.plan_locked;
-    snapshot = data; if (terminal.has(data.status)) cancelling = false;
+    snapshot = data; if (terminal.has(data.status)) { cancelling = false; cancelError = null; }
     get("[data-job-status]").textContent = cancelling ? "Отмена…" : labels[data.status] || data.status;
     input.disabled = !terminal.has(data.status); organization.disabled = input.disabled;
     organization.value = data.organization_hint || "";
@@ -75,7 +84,7 @@ export function initializeAnalysis(viewer) {
       get("[data-validation]").textContent = "Черновик состава · реквизиты ещё не извлечены · экспорт недоступен";
     }
     const partial = data.comparisons?.needs_review;
-    notice(data.error?.message || (partial ? "Есть неопределённые переходы. Проверьте отмеченные страницы и подтвердите состав." : data.status === "awaiting_confirmation" ? "Проверьте состав документов и подтвердите извлечение" : labels[data.status]), data.status === "failed" || partial);
+    notice(cancelError || data.error?.message || (partial ? "Есть неопределённые переходы. Проверьте отмеченные страницы и подтвердите состав." : data.status === "awaiting_confirmation" ? "Проверьте состав документов и подтвердите извлечение" : labels[data.status]), !!cancelError || data.status === "failed" || partial);
     return true;
   }
   async function refresh() {
@@ -92,6 +101,10 @@ export function initializeAnalysis(viewer) {
         const incomplete = Object.values(data.document_processing || {}).some(p => p.status !== "recognized");
         get("[data-validation]").textContent = incomplete ? "JSON 1.0 · есть блоки без распознанных реквизитов · см. предупреждения" : "✓ Проверенный результат · schema_version 1.0";
         get("[data-export]").disabled = false; renderFacts(result, data.document_processing); boundaries.result(result);
+        try {
+          const detailed = await api(`/api/v1/jobs/${id}/extractions`, { signal });
+          if (current(own, id)) renderFacts(result, data.document_processing, detailed, viewer);
+        } catch (error) { if (current(own, id) && error.code !== "extractions_unavailable") notice(error.message, true); }
         journal("json_ready", {}); paint();
       }
       if (terminal.has(data.status)) { source?.close(); clearTimeout(pollTimer); }
@@ -168,9 +181,9 @@ export function initializeAnalysis(viewer) {
   }
   input.addEventListener("change", () => accept(input.files));
   const dropzone = get("[data-dropzone]");
-  dropzone.addEventListener("dragover", event => { event.preventDefault(); dropzone.classList.add("upload--drag"); });
-  dropzone.addEventListener("dragleave", () => dropzone.classList.remove("upload--drag"));
-  dropzone.addEventListener("drop", event => { event.preventDefault(); dropzone.classList.remove("upload--drag"); if (!input.disabled) accept(event.dataTransfer.files); });
+  for (const kind of ["dragenter", "dragover"]) dropzone.addEventListener(kind, event => { event.preventDefault(); dropzone.classList.add("upload__label--drag"); });
+  dropzone.addEventListener("dragleave", event => { if (!dropzone.contains(event.relatedTarget)) dropzone.classList.remove("upload__label--drag"); });
+  dropzone.addEventListener("drop", event => { event.preventDefault(); dropzone.classList.remove("upload__label--drag"); if (!input.disabled) accept(event.dataTransfer.files); });
   start.addEventListener("click", async () => {
     const own = generation, id = jobId; starting = true; paint();
     try { const data = await api(`/api/v1/jobs/${id}/start`, { method: "POST" }); if (current(own, id)) { await state(data, own); if (current(own, id)) { connect(); clearTimeout(pollTimer); poll(); } } }
@@ -179,16 +192,16 @@ export function initializeAnalysis(viewer) {
   });
   get("[data-cancel]").addEventListener("click", async () => {
     if (cancelling || !jobId) return; const own = generation, id = jobId;
-    cancelling = true; get("[data-job-status]").textContent = "Отмена…"; paint();
+    cancelling = true; cancelError = null; get("[data-job-status]").textContent = "Отмена…"; paint();
     try { const data = await cancelJob(id); if (current(own, id)) { cancelling = false; await state(data, own); source?.close(); } }
-    catch (error) { if (current(own, id)) { cancelling = false; paint(); notice("Отмена не подтверждена. Повторите отмену или выберите «Новый пакет».", true); } }
+    catch (error) { if (current(own, id)) { cancelling = false; cancelError = "Отмена не подтверждена. Повторите отмену или выберите «Новый пакет»."; paint(); notice(cancelError, true); } }
   });
   get("[data-new-analysis]").hidden = false; get("[data-new-analysis]").addEventListener("click", newPacket);
   get("[data-export]").addEventListener("click", () => { if (confirmed) { downloadJSON(confirmed); exported = true; } });
   setInterval(() => {
     if (!snapshot?.expires_at) return;
     const seconds = Math.max(0, Math.ceil((Date.parse(snapshot.expires_at) - Date.now()) / 1000));
-    get("[data-ttl]").textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")} до удаления`;
+    get("[data-ttl]").textContent = `${Math.floor(seconds / 3600)}:${String(Math.floor(seconds % 3600 / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")} до удаления`;
     if (!seconds && !stopped) { stopped = true; close(); boundaries.expire(); paint(); notice("Срок хранения истёк. Создайте новый пакет.", true); }
   }, 1000);
   if (jobId) { const own = generation; refresh().then(() => { if (own === generation && !stopped && snapshot && !terminal.has(snapshot.status)) { connect(); poll(); } }); }

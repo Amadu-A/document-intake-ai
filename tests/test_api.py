@@ -132,12 +132,12 @@ async def test_extraction_v4_base_updates_without_overwriting_custom_text(client
     response = await submit(client)
     owner = (await container.database.get(response.json()["job_id"])).owner
     prompts = container.prompts
-    saved = {**prompts.base, "extraction": prompts.previous_extraction}
+    saved = {**prompts.base, "extraction": next(iter(prompts.previous_extractions))}
     await container.database.save_prompts(owner, saved)
     current = (await client.get("/api/v1/session/prompts", headers=KEY)).json()
     assert current["prompts"]["extraction"] == prompts.base["extraction"]
-    assert current["versions"]["extraction"].startswith("v5:")
-    custom = prompts.previous_extraction + "\nПользовательское уточнение."
+    assert current["versions"]["extraction"].startswith("v6:")
+    custom = next(iter(prompts.previous_extractions)) + "\nПользовательское уточнение."
     await container.database.save_prompts(owner, {**saved, "extraction": custom})
     assert (await client.get("/api/v1/session/prompts", headers=KEY)).json()["prompts"][
         "extraction"

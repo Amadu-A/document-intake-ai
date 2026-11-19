@@ -11,6 +11,7 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from app.application.document_processing import ProcessDocument, part_context
+from app.application.extraction_validation import validate_details
 from app.application.inference_schema import extraction_schema
 from app.application.one_c_projection import (
     canonical_organization,
@@ -22,10 +23,12 @@ from app.application.ports import OCR, AnalysisSettings, Emit, JobRepository, St
 from app.application.related_dates import review_court_dates
 from app.core.observability import report_failure, timed
 from app.domain.boundaries import AttachmentPages, FixedGroup
+from app.domain.document_kinds import catalog_json
 from app.domain.document_names import document_filename
-from app.domain.document_processing import MAX_VLM_PAGES, DocumentCheckpoint
+from app.domain.document_processing import MAX_VLM_PAGES, DocumentCheckpoint, DocumentClassification
 from app.domain.errors import IntakeError, LeaseLost
 from app.domain.extraction import ExtractionDraft, PrimaryDateReading
+from app.domain.extractions import DetailedExtraction, DetailedFacts
 from app.domain.jobs import Job
 from app.domain.related_dates import RelatedDatesReading
 from app.domain.schema import (
@@ -166,17 +169,18 @@ class Analyze:
         last_code = "schema_validation_failed"
         uncertain_fields = set()
         candidate = context.get("candidate")
-        if model is ExtractionDraft and context.get("candidate"):
-            uncertain_fields.update(
-                ExtractionDraft.model_validate(context["candidate"]).uncertain_fields()
-            )
+        if issubclass(model, ExtractionDraft) and context.get("candidate"):
+            uncertain_fields.update(model.model_validate(context["candidate"]).uncertain_fields())
         for attempt in range(1, self.settings.model_attempts + 1):
             try:
                 request_schema = model.model_json_schema() if schema is None else schema
                 if uncertain_fields:
                     request_schema = deepcopy(request_schema)
                     for field in uncertain_fields:
-                        request_schema["$defs"]["Requisites"]["properties"][field] = {
+                        requisites_key = request_schema["properties"]["requisites"]["$ref"].split(
+                            "/"
+                        )[-1]
+                        request_schema["$defs"][requisites_key]["properties"][field] = {
                             "type": "null"
                         }
                         request_schema["$defs"]["PrimaryReadability"]["properties"][field] = {
@@ -186,7 +190,7 @@ class Analyze:
                 request_context = {**context, "validation_errors": feedback}
                 if candidate is not None:
                     request_context["candidate"] = candidate
-                if attempt > 1 and model is ExtractionDraft and candidate is not None:
+                if attempt > 1 and issubclass(model, ExtractionDraft) and candidate is not None:
                     request_context["revision_instruction"] = (
                         "Исправь нарушения из validation_errors в предыдущем candidate. "
                         "Независимые однозначно прочитанные реквизиты сохрани; ошибка номера "
@@ -255,12 +259,21 @@ class Analyze:
         pages: list[dict],
         emit: Emit,
         classification: Classification | None = None,
-    ) -> Extracted:
+        selection: DocumentClassification | None = None,
+    ) -> DetailedFacts:
         """Извлекает факты всей группы; большие комплекты согласует повторным VLM-проходом."""
         organization = canonical_organization(job.organization_hint)
-        schema = extraction_schema(organization, classification)
+        schema = extraction_schema(
+            organization,
+            classification,
+            detailed=True,
+            profile=selection.kind_code if selection else None,
+        )
         first_main = next(iter(group.main_pages or group.pages))
         context = {
+            "task": "extract_document",
+            "selected_kind_code": selection.kind_code if selection else None,
+            "document_kinds": json.loads(catalog_json()),
             "organization_hint": organization,
             "footer_details": True,
             "header_detail_page": first_main.model_dump() if len(group.pages) > 1 else None,
@@ -297,7 +310,7 @@ class Analyze:
             }
             context["rules"] += (
                 " Классификация уже определена для всего блока. Извлекай реквизиты "
-                "по выбранному шаблону письма; не меняй тип по его приложениям."
+                "по выбранному профилю, включая неписьма; не меняй тип по его приложениям."
             )
         if isinstance(group, FixedGroup):
             context["rules"] += (
@@ -337,6 +350,8 @@ class Analyze:
                     "schema_validation_failed",
                     "Тип блока не должен меняться при извлечении реквизитов",
                 )
+            if isinstance(value, DetailedExtraction):
+                validate_details(value, selection, pages, group.main_pages)
 
         if len(chunks) == 1:
             context["part"] = part_context(job, group, 1, 1)
@@ -389,7 +404,7 @@ class Analyze:
                     emit,
                 )
                 value = date_reading.document_date
-                schema["$defs"]["Requisites"]["properties"]["document_date"] = (
+                schema["$defs"]["DetailedRequisites"]["properties"]["document_date"] = (
                     {"type": "string", "format": "date", "const": value.isoformat()}
                     if value is not None
                     else {"type": "null"}
@@ -422,7 +437,7 @@ class Analyze:
                 job.prompts["extraction"],
                 {**context, "pages": page_context(pages)},
                 pages,
-                ExtractionDraft,
+                DetailedExtraction,
                 validate_facts,
                 emit,
                 schema=schema,
@@ -465,7 +480,7 @@ class Analyze:
                         "Не подставляй реквизиты получателя или другого документа.",
                     },
                     pages,
-                    ExtractionDraft,
+                    DetailedExtraction,
                     validate_facts,
                     emit,
                     schema=schema,
@@ -491,7 +506,7 @@ class Analyze:
                 main = [p for p in group.pages if p not in nested]
                 if attachments and main:
                     group.main_pages, group.attachments = main, attachments
-                    return await self._extract(job, group, pages, emit, classification)
+                    return await self._extract(job, group, pages, emit, classification, selection)
             if date_reading is not None:
                 facts.warnings = list(dict.fromkeys([*facts.warnings, *date_reading.warnings]))
             if facts.requisites.related_entities.court_cases:
@@ -513,7 +528,7 @@ class Analyze:
                     "Учитывай has_previous/has_next. Итог будет согласован отдельно.",
                 },
                 chunk,
-                ExtractionDraft,
+                DetailedExtraction,
                 validate_type,
                 emit,
                 schema=schema,
@@ -542,7 +557,7 @@ class Analyze:
                         "Не меняй утверждённые регистрационные границы.",
                     },
                     [],
-                    ExtractionDraft,
+                    DetailedExtraction,
                     validate_type,
                     emit,
                     schema=schema,
@@ -564,7 +579,7 @@ class Analyze:
                 "сохрани конфликты в warnings и все приложения проверенного плана.",
             },
             [],
-            ExtractionDraft,
+            DetailedExtraction,
             validate_result,
             emit,
             schema=schema,
@@ -721,7 +736,7 @@ class Analyze:
                 fingerprint = hashlib.sha256(
                     json.dumps(
                         [
-                            "document-processing-v1",
+                            "document-processing-v2",
                             job.prompts["extraction"],
                             [p.model_dump() for p in group.pages],
                         ],
@@ -788,7 +803,9 @@ class Analyze:
                 facts.warnings = list(dict.fromkeys(facts.warnings))
                 files[primary].documents.append(
                     Document(
-                        **facts.model_dump(),
+                        **(
+                            facts.legacy() if isinstance(facts, DetailedFacts) else facts
+                        ).model_dump(),
                         document_id=document_id,
                         segment_index=index,
                         pages=[p.page_number for p in group.pages if p.file_id == primary],
@@ -809,6 +826,7 @@ class Analyze:
                             facts=facts,
                             group=group,
                             processing=processing,
+                            extraction_schema_version="2.0",
                         ).model_dump(mode="json"),
                     },
                 )

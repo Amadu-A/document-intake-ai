@@ -90,12 +90,16 @@ async def test_organization_context_and_noncontiguous_pdfs_through_rest(
             assert document["classification"]["document_root"] == "Процессуальные документы"
             assert document["classification"]["template_path"] == []
             assert document["one_c"]["template_leaf"] is None
-            assert document["requisites"]["sender"]["name"] is None
-            assert document["one_c"]["counterparty"] is None
-            assert document["one_c"]["comment"] is None
-            assert any("[template_not_supported]" in w for w in document["warnings"])
+            assert document["requisites"]["sender"]["name"] == "Синтетический отправитель"
+            assert document["one_c"]["counterparty"] == (
+                "Синтетический отправитель" if organization else None
+            )
+            assert document["one_c"]["comment"] == document["requisites"]["summary"]
+            assert not any("[template_not_supported]" in w for w in document["warnings"])
         else:
-            assert document["one_c"]["counterparty"] == "Синтетический отправитель"
+            assert document["one_c"]["counterparty"] == (
+                "Синтетический отправитель" if organization else None
+            )
             assert document["one_c"]["comment"] == document["requisites"]["summary"]
         assert document["one_c"]["organization"] == organization
         response = await client.get(document["attachment_file"]["file_url"])

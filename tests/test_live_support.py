@@ -43,11 +43,39 @@ def local_worker_hook(container):
     return execute
 
 
-@pytest.mark.parametrize("expected_status", ["unsupported_template", "recognized"])
-async def test_runner_compares_placeholder_status_and_downloads(
+async def test_runner_reads_expected_facts_from_unchanged_private_json(tmp_path, client, container):
+    """Ожидаемые непустые реквизиты читаются из эталона; в публичную матрицу не копируются."""
+    value = facts()
+    value["requisites"]["document_number"] = "SYNTHETIC-REFERENCE"
+    source = tmp_path / "reference.pdf"
+    await asyncio.to_thread(source.write_bytes, pdf_bytes())
+    reference = source.with_suffix(".json")
+    payload = json.dumps({"files": [{"documents": [value]}]})
+    await asyncio.to_thread(reference.write_text, payload, "utf-8")
+    container.vision.answers.append(value)
+    client.event_hooks["response"].append(local_worker_hook(container))
+    case = comparison_case(source.name)
+    case["checks"] = [
+        {"path": "requisites.document_number", "expected_from_example": True, "page": 1}
+    ]
+    report = await run_comparison(
+        client,
+        [case],
+        tmp_path,
+        tmp_path / "private.json",
+        headers=KEY,
+        job_timeout_seconds=10,
+        poll_interval=0,
+    )
+    assert report["cases"][0]["status"] == "match"
+    assert await asyncio.to_thread(reference.read_text, "utf-8") == payload
+
+
+@pytest.mark.parametrize("expected_status", ["extraction_failed", "recognized"])
+async def test_runner_compares_document_status_and_downloads(
     tmp_path, client, container, expected_status
 ):
-    """Матрица проверяет реальный статус заглушки; наличие PDF не означает готовые реквизиты."""
+    """Матрица проверяет реальный статус блока; наличие PDF не означает готовые реквизиты."""
     source = tmp_path / "nonletter.pdf"
     source.write_bytes(pdf_bytes())
     container.vision.answers.append(classification(False))
@@ -66,10 +94,10 @@ async def test_runner_compares_placeholder_status_and_downloads(
         poll_interval=0,
     )
     row = next(r for r in report["rows"] if r["field_path"] == "documents.0.processing.status")
-    assert row["actual"] == "unsupported_template"
-    assert (row["status"] == "match") is (expected_status == "unsupported_template")
+    assert row["actual"] == "recognized"
+    assert (row["status"] == "match") is (expected_status == "recognized")
     assert report["cases"][0]["status"] == (
-        "match" if expected_status == "unsupported_template" else "mismatch"
+        "match" if expected_status == "recognized" else "mismatch"
     )
 
 
