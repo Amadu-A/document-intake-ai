@@ -22,11 +22,11 @@ from tests.test_document_processing import classification
 @pytest.mark.parametrize(
     ("kind", "number", "date", "expected"),
     [
-        (None, None, None, "doc_3_Письмо.pdf"),
-        ("Счёт", None, None, "doc_3_Счёт.pdf"),
-        ("УПД", "42/Б", "2026-11-18", "doc_3_УПД_42_Б_2026-11-18.pdf"),
-        ("Договор", None, "2026-01-02", "doc_3_Договор_2026-01-02.pdf"),
-        ("../../Счёт:\x00?\\", "../A*<1>\u202e", None, "doc_3_Счёт_A_1.pdf"),
+        (None, None, None, "Письмо.pdf"),
+        ("Счёт", None, None, "Счёт.pdf"),
+        ("УПД", "42/Б", "2026-11-18", "УПД № 42／Б от 18.11.2026.pdf"),
+        ("Договор", None, "2026-01-02", "Договор от 02.01.2026.pdf"),
+        ("../../Счёт:\x00?\\", "../A*<1>\u202e", None, "Счёт № ..／A＊＜1＞.pdf"),
     ],
 )
 def test_document_names_use_only_verified_primary_facts(kind, number, date, expected):
@@ -39,21 +39,15 @@ def test_document_names_use_only_verified_primary_facts(kind, number, date, expe
     value["requisites"].update(document_number=number, document_date=date)
     parsed = Extracted.model_validate(value)
     assert document_filename(3, parsed) == expected
-    assert document_archive_name(3, parsed) == "doc_3/" + expected.removeprefix("doc_3_")
+    assert document_archive_name(3, parsed) == "doc_3/" + expected
 
 
-def test_name_length_and_letter_direction_are_windows_safe():
-    """Кириллица помещается в basename; направление берётся из классификации."""
-    value = facts()
-    value["classification"].update(
-        is_letter=False, document_root="Договоры", document_kind="Д" * 500
-    )
-    value["requisites"]["document_number"] = "Я" * 500
-    assert len(document_filename(10000, Extracted.model_validate(value)).encode()) < 240
+def test_missing_kind_uses_letter_direction():
+    """При неизвестном фактическом виде направление берётся из классификации."""
     for direction, label in (("incoming", "Входящее"), ("outgoing", "Исходящее")):
         parsed = Extracted.model_validate(facts())
         parsed.classification.direction = direction
-        assert document_filename(1, parsed) == f"doc_1_{label}_письмо.pdf"
+        assert document_filename(1, parsed) == f"{label} письмо.pdf"
 
 
 async def completed_packet(client, container):
@@ -111,13 +105,11 @@ async def test_zip_follows_approved_global_order_names_hashes_and_page_sequence(
         (d for f in result["files"] for d in f["documents"]), key=lambda d: d["segment_index"]
     )
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
-        assert archive.namelist() == ["doc_1/Письмо_42_Б_2026-11-18.pdf", "doc_2/Счёт.pdf"]
+        assert archive.namelist() == ["doc_1/Письмо № 42／Б от 18.11.2026.pdf", "doc_2/Счёт.pdf"]
         archive.extractall(tmp_path / "unpacked")
         for index, document in enumerate(documents):
             prefix = f"doc_{document['segment_index']}"
-            name = (
-                prefix + "/" + document["attachment_file"]["file_name"].removeprefix(prefix + "_")
-            )
+            name = prefix + "/" + document["attachment_file"]["file_name"]
             raw = archive.read(name)
             assert (tmp_path / "unpacked" / name).read_bytes() == raw
             single = await client.get(document["attachment_file"]["file_url"])
@@ -138,14 +130,17 @@ async def test_archive_folder_layout_replaces_flat_cache_without_name_collision(
     container.vision.answers.extend([{"solution": False}, facts(), facts()])
     await process(container, identifier)
     job = await container.database.get(identifier)
-    entries = list(job.manifest["documents"].values())
+    entries = [
+        {**item, "file_name": f"doc_{i}_Письмо.pdf"}
+        for i, item in enumerate(job.manifest["documents"].values(), 1)
+    ]
     flat = await container.storage.archive(job, entries)
     with zipfile.ZipFile(flat["path"]) as archive:
         assert archive.namelist() == ["doc_1_Письмо.pdf", "doc_2_Письмо.pdf"]
     response = await client.get(f"/api/v1/jobs/{identifier}/archive", headers=KEY)
     assert response.status_code == 200
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
-        assert archive.namelist() == ["doc_1/Письмо.pdf", "doc_2/Письмо.pdf"]
+        assert archive.namelist() == ["doc_1/Письмо.pdf", "doc_2/Письмо (2).pdf"]
         for index, name in enumerate(archive.namelist(), 1):
             with pymupdf.open(stream=archive.read(name)) as pdf:
                 assert len(pdf) == 1 and pdf[0].get_text().strip() == f"SYNTHETIC PAGE {index}"

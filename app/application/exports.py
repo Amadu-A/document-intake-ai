@@ -13,7 +13,7 @@ from app.domain.boundaries import (
 )
 from app.domain.comparisons import ALGORITHM_VERSION, adjacent_comparisons
 from app.domain.document_kinds import kind_metadata
-from app.domain.document_names import document_archive_name
+from app.domain.document_names import document_archive_name, document_filename
 from app.domain.errors import IntakeError
 from app.domain.extractions import DetailedDocument, DetailedFacts, DetailedResult
 from app.domain.jobs import TERMINAL, Job, utcnow
@@ -42,6 +42,20 @@ class Exports:
         """Даёт независимый от web путь ZIP всех регистраций пачки."""
         return f"/api/v1/jobs/{job_id}/archive"
 
+    def _document_names(self, job: Job) -> dict[str, str]:
+        """Проецирует актуальные имена старых и новых заданий без изменения сохранённых фактов."""
+        if not job.result:
+            return {}
+        result = BatchResult.model_validate(job.result)
+        used: set[str] = set()
+        return {
+            document.document_id: document_filename(document.segment_index, document, used)
+            for document in sorted(
+                (d for source in result.files for d in source.documents),
+                key=lambda d: d.segment_index,
+            )
+        }
+
     async def _archive(self, job: Job) -> dict:
         """Берёт проверенные факты и целые PDF в глобальном порядке утверждённых блоков."""
         if job.status not in {"completed", "completed_with_warnings"} or not job.result:
@@ -53,12 +67,13 @@ class Exports:
             (d for source in result.files for d in source.documents), key=lambda d: d.segment_index
         )
         entries = []
+        used: set[str] = set()
         for document in documents:
             item = job.manifest.get("documents", {}).get(document.document_id)
             if not item:
                 raise IntakeError("artifact_not_found", "Не найден PDF утверждённого блока", 404)
             entries.append(
-                {**item, "file_name": document_archive_name(document.segment_index, document)}
+                {**item, "file_name": document_archive_name(document.segment_index, document, used)}
             )
         if not entries:
             raise IntakeError("archive_not_ready", "Нет готовых документов для архива", 409)
@@ -177,6 +192,7 @@ class Exports:
 
     def status(self, job: Job, include_pages: bool = True) -> dict:
         """Формирует публичный snapshot без приватных полей persistence."""
+        names = self._document_names(job)
         pages = [
             {
                 "file_id": p["file_id"],
@@ -203,7 +219,7 @@ class Exports:
         artifacts = [
             {
                 "document_id": document_id,
-                "file_name": item["file_name"],
+                "file_name": names.get(document_id, item["file_name"]),
                 "byte_size": item["byte_size"],
                 "sha256": item["sha256"],
                 "file_url": self.signed(job, self.document_path(job.id, document_id)),
@@ -302,9 +318,11 @@ class Exports:
         """Добавляет настоящие ссылки, не изменяя утверждённое дерево JSON 1.0."""
         result = deepcopy(await self.intake.result(job_id, owner))
         job = await self.intake.get(job_id, owner)
+        names = self._document_names(job)
         for source in result["files"]:
             source["file_url"] = self.signed(job, self.source_path(job.id, source["file_id"]))
             for document in source["documents"]:
+                document["attachment_file"]["file_name"] = names[document["document_id"]]
                 document["attachment_file"]["file_url"] = self.signed(
                     job, self.document_path(job.id, document["document_id"])
                 )
@@ -412,7 +430,7 @@ class Exports:
         elif kind == "document":
             artifact = job.manifest.get("documents", {}).get(item_id)
             if artifact and job.status in {"completed", "completed_with_warnings"}:
-                return job, artifact
+                return job, {**artifact, "file_name": self._document_names(job)[item_id]}
         else:
             preview = next(
                 (

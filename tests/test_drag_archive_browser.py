@@ -166,7 +166,7 @@ async def test_multiselection_drop_joins_target_group_and_archive_retry(panel_se
                 await page.locator("[data-cut-download]").click()
             download = await event.value
             with zipfile.ZipFile(await download.path()) as archive:
-                assert archive.namelist() == ["doc_1/Письмо.pdf", "doc_2/Письмо.pdf"]
+                assert archive.namelist() == ["doc_1/Письмо.pdf", "doc_2/Письмо (2).pdf"]
             assert (await read_plan(page))["approved_revision"] == current["plan_revision"]
             page.on("dialog", lambda dialog: dialog.accept())
             await page.locator("[data-new-analysis]").click()

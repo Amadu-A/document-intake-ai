@@ -147,7 +147,8 @@ PDF — `GET /api/v1/jobs/JOB/documents/DOCUMENT/file`; происхождени
 `GET /api/v1/jobs/JOB/documents/DOCUMENT/manifest` → `DocumentManifest`.
 Для архива: `POST /api/v1/jobs/JOB/archive` без тела → `200 ArchiveView`, затем
 GET по `file_url`, либо сразу `GET /api/v1/jobs/JOB/archive`. Ответ `application/zip`.
-ZIP содержит `doc_N/<фактический_вид>[_номер][_дата].pdf`, время создания UTC.
+ZIP содержит `doc_N/<Полное название> № <номер> от <ДД.ММ.ГГГГ>.pdf`, время создания UTC.
+Отдельный PDF имеет то же имя; отсутствующие части опущены, дубликаты имеют ` (2)` и далее.
 Проверяйте Content-Length/X-Content-SHA256; заголовки и JSON содержат реальные значения.
 
 Подпись URL действует до пяти минут и не дольше TTL задания. За новой ссылкой можно
