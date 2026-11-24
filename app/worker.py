@@ -60,9 +60,9 @@ async def maintenance(container: Container) -> None:
             for job_id in expired:
                 await container.storage.remove(job_id)
                 await container.database.purge(job_id)
-            for job_id in await container.database.pending():
+            for job_id, fence in await container.database.pending_publications():
                 await container.rabbit.publish(job_id)
-                await container.database.published(job_id)
+                await container.database.published(job_id, fence)
             # После crash upload может остаться без DB-строки; активные uploads младше часа.
             for directory in container.storage.root.iterdir():
                 try:

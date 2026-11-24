@@ -115,6 +115,9 @@ def window_pdf(pages: list[dict]) -> bytes:
                     to_page=page["page_number"] - 1,
                     links=False,
                     annots=False,
+                    rotate=(source[page["page_number"] - 1].rotation + page["ocr_rotation"]) % 360
+                    if page.get("ocr_rotation")
+                    else -1,
                 )
         return result.tobytes(garbage=4, deflate=True)
     finally:
@@ -229,17 +232,27 @@ class DoclingOCR:
         if not source:
             info = Path(page["pdf"]).stat()
             source = [str(Path(page["pdf"]).resolve()), info.st_size, info.st_mtime_ns]
-        return {
+        key = {
             "version": 1,
             "source": source,
             "page": page["page_number"],
             "preset": self.settings.docling_ocr_preset,
             "languages": list(self.settings.docling_ocr_languages),
         }
+        if page.get("ocr_rotation"):
+            key["rotation"] = page["ocr_rotation"]
+        return key
+
+    def _cache_path(self, page: dict) -> Path:
+        """Хранит нормализованный OCR отдельно, не затирая checkpoint исходной ориентации."""
+        path = Path(page["preview"])
+        if page.get("ocr_rotation"):
+            return path.with_name(f"{path.stem}.rotation-{page['ocr_rotation']}.ocr.json")
+        return path.with_suffix(".ocr.json")
 
     def _cached(self, page: dict) -> dict | None:
         """Читает durable OCR checkpoint только при совпадении fingerprint и SHA-256 JSON."""
-        path = Path(page["preview"]).with_suffix(".ocr.json")
+        path = self._cache_path(page)
         try:
             metadata = json.loads(path.with_suffix(".meta.json").read_text("utf-8"))
             raw = path.read_bytes()
@@ -260,7 +273,7 @@ class DoclingOCR:
 
     def _save_cache(self, page: dict, raw: str) -> None:
         """Атомарно публикует JSON и fingerprint, не сохраняя OCR в событиях или логах."""
-        path = Path(page["preview"]).with_suffix(".ocr.json")
+        path = self._cache_path(page)
         temporary = path.with_suffix(".tmp")
         temporary.write_text(raw, "utf-8")
         temporary.replace(path)
@@ -283,7 +296,14 @@ class DoclingOCR:
         request, target = directory / "request.json", directory / "window.pdf"
         payload = {
             "operation": "ocr_window",
-            "pages": [{"pdf": p["pdf"], "page_number": p["page_number"]} for p in pages],
+            "pages": [
+                {
+                    "pdf": p["pdf"],
+                    "page_number": p["page_number"],
+                    "ocr_rotation": p.get("ocr_rotation", 0),
+                }
+                for p in pages
+            ],
             "target": str(target),
             "settings": {"timeout": self.settings.docling_timeout_seconds},
         }

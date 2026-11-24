@@ -2,6 +2,7 @@
 """Функциональные проверки lease/fencing, recovery, outbox, cancellation и TTL."""
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import timedelta
 
 import pytest
@@ -9,7 +10,7 @@ import pytest
 from app.application.intake import Intake
 from app.domain.errors import IntakeError, LeaseLost
 from app.domain.jobs import utcnow
-from app.infrastructure.database import JobRow
+from app.infrastructure.database import JobRow, SignalRow
 from tests.support import MemoryUpload, pdf_bytes
 
 
@@ -20,15 +21,45 @@ async def create(container):
     )
 
 
-async def test_outbox_survives_published_signal_until_claim(container):
-    """Потеря подтверждения AMQP не теряет работу: durable outbox остаётся до claim."""
+async def test_confirmed_outbox_is_removed_and_duplicate_claim_is_safe(container):
+    """Confirm снимает сигнал повтора; durable broker доставит ID, повторный claim безопасен."""
     job = await create(container)
     assert await container.database.pending() == [job.id]
-    await container.database.published(job.id)
+    assert await container.database.pending_publications() == [(job.id, job.fence)]
+    await container.database.published(job.id, job.fence)
     assert await container.database.pending() == []
     claimed = await container.database.claim(job.id)
     assert claimed.fence == 1
     assert await container.database.claim(job.id) is None
+
+
+async def test_late_publisher_confirm_cannot_delete_recovery_generation(container):
+    """Старый confirm после claim/crash/recovery не удаляет новый durable сигнал того же ID."""
+    job = await create(container)
+    publication = (await container.database.pending_publications())[0]
+    first = await container.database.claim(job.id)
+    async with container.database.sessions.begin() as session:
+        row = await session.get(JobRow, job.id)
+        row.lease_until = utcnow() - timedelta(seconds=1)
+    await container.database.recover()
+    await container.database.published(*publication)
+    assert await container.database.pending() == [job.id]
+    recovered = await container.database.claim(job.id)
+    assert recovered.fence > first.fence
+
+
+async def test_failed_publish_has_durable_retry_and_confirm_is_idempotent(container):
+    """До подтверждения сигнал не исчезает; повтор записи receipt безопасен и не создаёт сигнал."""
+    job = await create(container)
+    signal = (await container.database.pending_publications())[0]
+    assert await container.database.pending_publications() == [signal]
+    async with container.database.sessions() as session:
+        assert await session.get(SignalRow, job.id) is not None
+    await container.database.published(*signal)
+    await container.database.published(*signal)
+    assert await container.database.pending_publications() == []
+    async with container.database.sessions() as session:
+        assert await session.get(SignalRow, job.id) is None
 
 
 async def test_restart_recovery_fences_old_worker(container):
@@ -45,6 +76,63 @@ async def test_restart_recovery_fences_old_worker(container):
     with pytest.raises(LeaseLost):
         await container.database.finish(job.id, first.fence, {}, {}, None, False)
     assert not await container.database.heartbeat(job.id, first.fence)
+
+
+async def test_failed_receipt_transaction_rolls_back_outbox_delete(container, monkeypatch):
+    """Ошибка до commit сохраняет outbox; после reconnect допустима повторная отправка."""
+    await create(container)
+    signal = (await container.database.pending_publications())[0]
+    transaction = container.database._transaction
+
+    @asynccontextmanager
+    async def failed_commit():
+        """Откатывает реальную транзакцию после SQL DELETE, как при ошибке до commit."""
+        async with transaction() as session:
+            yield session
+            raise ConnectionError("controlled receipt failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(container.database, "_transaction", failed_commit)
+        with pytest.raises(ConnectionError):
+            await container.database.published(*signal)
+    assert await container.database.pending_publications() == [signal]
+    await container.database.published(*signal)
+    assert await container.database.pending_publications() == []
+
+
+async def test_late_prepare_confirm_does_not_delete_new_analysis_signal(client, container):
+    """Поздний receipt подготовки не удаляет сигнал анализа после подтверждения состава."""
+    from app.worker import process
+    from tests.test_boundary_api import KEY, confirm, segmentation
+    from tests.test_boundary_api import create as upload
+
+    identifier = (await upload(client, endpoint="uploads", pages=2))["job_id"]
+    old_signal = (await container.database.pending_publications())[0]
+    await process(container, identifier)
+    plan = await segmentation(client, identifier)
+    saved = await client.put(
+        f"/api/v1/jobs/{identifier}/segmentation",
+        headers=KEY,
+        json={
+            "expected_revision": plan["plan_revision"],
+            "documents": [
+                {
+                    "client_id": "operator",
+                    "pages": [
+                        p.model_dump()
+                        for p in (await container.database.get(identifier)).page_refs()
+                    ],
+                }
+            ],
+            "action": "edit",
+        },
+    )
+    assert saved.status_code == 200
+    await confirm(client, identifier, saved.json()["plan_revision"])
+    new_signal = (await container.database.pending_publications())[0]
+    assert new_signal[0] == old_signal[0] and new_signal[1] > old_signal[1]
+    await container.database.published(*old_signal)
+    assert await container.database.pending_publications() == [new_signal]
 
 
 async def test_cancel_fences_running_worker(container):

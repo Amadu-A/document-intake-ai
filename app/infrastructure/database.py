@@ -501,23 +501,34 @@ class Database(BoundaryTransactions):
             return [{"id": r.sequence, "event": r.kind, "data": r.data} for r in rows]
 
     async def pending(self) -> list[str]:
-        """Читает outbox; повторная доставка разрешена и безопасна благодаря claim."""
-        async with self.sessions() as session:
-            return list(
-                await session.scalars(
-                    select(SignalRow.job_id)
-                    .where(SignalRow.next_at <= utcnow())
-                    .order_by(SignalRow.next_at)
-                    .limit(20)
-                )
-            )
+        """Возвращает ID сигналов для существующих драйверов/проверок без изменения их контракта."""
+        return [job_id for job_id, _ in await self.pending_publications()]
 
-    async def published(self, job_id: str) -> None:
-        """Оставляет durable сигнал до claim; подтверждённая публикация отложена на 30 секунд."""
+    async def pending_publications(self) -> list[tuple[str, int]]:
+        """Читает сигнал и его fencing-поколение одним SQL-снимком до публикации."""
+        async with self.sessions() as session:
+            rows = await session.execute(
+                select(SignalRow.job_id, func.coalesce(JobRow.data["fence"].as_integer(), 0))
+                .join(JobRow, JobRow.id == SignalRow.job_id)
+                .where(SignalRow.next_at <= utcnow())
+                .order_by(SignalRow.next_at)
+                .limit(20)
+            )
+            return [(job_id, int(fence)) for job_id, fence in rows]
+
+    async def published(self, job_id: str, fence: int) -> None:
+        """Удаляет outbox только после publisher confirm и только для прочитанного поколения.
+
+        Неопределённый confirm/ошибка commit оставляет retry. Позднее подтверждение
+        прошлого prepare/analyze не может удалить новый сигнал того же job_id.
+        """
         async with self._transaction() as session:
-            row = await session.get(SignalRow, job_id, with_for_update=True)
-            if row:
-                row.next_at = utcnow() + timedelta(seconds=30)
+            try:
+                _, job = await self._locked(session, job_id)
+            except IntakeError:
+                return
+            if job.fence == fence:
+                await session.execute(delete(SignalRow).where(SignalRow.job_id == job_id))
 
     async def recover(self) -> list[str]:
         """Восстанавливает зависшие lease, ограничивает retry и возвращает истёкшие job ids."""

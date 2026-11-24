@@ -135,13 +135,16 @@ async def test_two_documents_share_process_limit(settings, tmp_path, concurrency
     settings.docling_async = False
     active, maximum = 0, 0
     owners = []
+    together = asyncio.Event()
 
     async def transport(request):
         """Держит HTTP-запрос открытым и учитывает весь суммарный параллелизм процесса."""
         nonlocal active, maximum
         active += 1
         maximum = max(active, maximum)
-        await asyncio.sleep(0.01)
+        if active == concurrency:
+            together.set()
+        await asyncio.wait_for(together.wait(), 5)
         active -= 1
         return document_result(input_numbers(request))
 

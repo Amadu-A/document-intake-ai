@@ -188,6 +188,30 @@ Offline tests требуют `uv` и Python 3.12–3.14. `up.sh` не требу
 диапазонов). Если что-то отсутствует, это FAIL,
 а не успешный skip. Частные сравнения/замеры сохраняются в игнорируемый `reports/local/`.
 
+Отдельная проверка доставки: `bash scripts/test.sh --live -s tests/test_delivery_live.py`.
+Нужен доступ к локальному Docker и заранее загруженные образы `rabbitmq:4.1-management`,
+`postgres:16.15-alpine`, `document-intake-ai:local` (образ обычного `up.sh`).
+Другой готовый образ окружения указывается флагом `--delivery-image=имя:тег`.
+Стенд создаёт только
+собственные временные контейнеры/сеть с префиксом `document-intake-delivery-`,
+loopback-портами и случайными secrets; shared стек и `.env` не использует.
+Исходный код приложения монтируется из текущего checkout; в worker подменена только
+длительная бизнес-операция. Это проверка реальной доставки/PG/AMQP, а не качества AI.
+Сценарии: backlog более 30 с, потеря настоящего AMQP confirm, разрыв соединения,
+SIGKILL worker и restart PG/RabbitMQ/worker с сохранёнными volumes.
+
+Частный счёт-фактура: `bash scripts/test.sh --live tests/test_upd_example.py`.
+Нужны пять `examples/УПД.*` из ТЗ и доступные Docling/shared-VLM через Settings;
+на Windows — `uv run pytest --live tests/test_upd_example.py`.
+Controlled REST/browser проверки запускаются обычной командой с `--browser` и
+не означают точности AI. Отсутствующие приватные fixtures в offline — `NOT_RUN`;
+явный live без них завершается ошибкой. Эталоны не изменяются.
+Исключение владельца от 24.11.2026: без обслуживаемой организации
+`one_c.counterparty=null`, несмотря на продавца в иллюстративных JSON эталона.
+После обновления для сохранённого пользовательского extraction-промпта нужно
+«Промпты» → вкладка извлечения → восстановить базовый текст → сохранить.
+Запущенные задания и пользовательские overrides автоматически не переписываются.
+
 Browser prerequisites: доступ к download Playwright и системные библиотеки Chromium.
 Скрипт автоматически ставит закреплённый Chromium при флаге browser.
 Запуск: `bash scripts/test.sh --browser`, Windows —

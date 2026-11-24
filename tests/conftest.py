@@ -26,6 +26,11 @@ def pytest_addoption(parser):
     """Отделяет opt-in реальные системы от обязательных offline-проверок."""
     parser.addoption("--live", action="store_true", help="Настоящие shared зависимости/HTTP")
     parser.addoption(
+        "--delivery-image",
+        default="document-intake-ai:local",
+        help="Готовый образ окружения worker для изолированных delivery-тестов",
+    )
+    parser.addoption(
         "--browser",
         action="store_true",
         help="Настоящий Chromium, предварительно установленный Playwright",

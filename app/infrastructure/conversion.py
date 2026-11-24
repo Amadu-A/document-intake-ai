@@ -59,6 +59,12 @@ def write_ocr_window(pages: list[dict], target: Path) -> None:
                 to_page=page["page_number"] - 1,
                 links=False,
                 annots=False,
+                rotate=(
+                    readers[page["pdf"]][page["page_number"] - 1].rotation + page["ocr_rotation"]
+                )
+                % 360
+                if page.get("ocr_rotation")
+                else -1,
             )
         result.save(target, garbage=4, deflate=True)
     finally:

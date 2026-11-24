@@ -73,6 +73,7 @@ class ProcessDocument:
     ) -> tuple[DetailedFacts, DocumentProcessing]:
         """Изолирует отказ одного блока; утрата lease и отмена продолжают прерывать worker."""
         chunks = windows(pages, min(MAX_VLM_PAGES, self.settings.vlm_window_pages))
+        rotations = {}
         processing = DocumentProcessing(
             segment_index=group.document_index,
             status="processing",
@@ -87,9 +88,16 @@ class ProcessDocument:
             for index, chunk in enumerate(chunks, 1):
                 await emit("document_processing", processing.model_dump(mode="json"))
 
-                def validate(value: DocumentClassification) -> None:
+                def validate(value: DocumentClassification, selected=chunk) -> None:
                     """Проверяет профиль и роль относительно доверенного контекста организации."""
                     validate_selection(value, job.organization_hint, pages)
+                    allowed = {(p["file_id"], p["page_number"]) for p in selected}
+                    refs = [(p.file_id, p.page_number) for p in value.page_rotations]
+                    if len(set(refs)) != len(refs) or not set(refs).issubset(allowed):
+                        raise IntakeError(
+                            "schema_validation_failed",
+                            "Повороты должны адресовать уникальные страницы текущей части",
+                        )
 
                 result = await self.request(
                     job.prompts["extraction"] + "\nТЕКУЩИЙ ЭТАП — только классификация блока. "
@@ -121,6 +129,7 @@ class ProcessDocument:
                     schema=classification_schema(job.organization_hint),
                 )
                 classification, summary = result.classification, result.continuation_summary
+                rotations.update({(p.file_id, p.page_number): p for p in result.page_rotations})
                 warnings.extend(result.warnings)
                 previous = result.model_dump(mode="json")
                 processing.parts_completed = index
@@ -148,6 +157,7 @@ class ProcessDocument:
                 else:
                     await emit(kind, data)
 
+            result.page_rotations = list(rotations.values())
             facts = await extract(job, group, pages, extraction_emit, classification, result)
             if (
                 result.kind_code in {"D04", "D05", "D06", "D07", "D08"}

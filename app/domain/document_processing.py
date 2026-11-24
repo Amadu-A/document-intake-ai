@@ -14,6 +14,12 @@ from app.domain.segmentation import PageRef
 MAX_VLM_PAGES = 8
 
 
+class PageRotation(PageRef):
+    """Технический поворот для чтения по решению VLM; исходный PDF и физический адрес неизменны."""
+
+    clockwise_degrees: Literal[0, 90, 180, 270]
+
+
 class DocumentClassification(StrictModel):
     """Определяет тип всего утверждённого блока до выбора шаблона реквизитов."""
 
@@ -24,6 +30,14 @@ class DocumentClassification(StrictModel):
     our_role: Literal["supplier", "customer", "service_provider"] | None = None
     role_evidence: str | None = Field(None, max_length=500)
     role_source_page: PageRef | None = None
+    page_rotations: list[PageRotation] = Field(
+        default_factory=list,
+        max_length=1000,
+        description="Для каждой страницы части укажи корректирующий поворот ПО ЧАСОВОЙ "
+        "стрелке до читаемого положения: 0 если уже прямо, иначе 90/180/270. "
+        "Не текущий наклон: текст, уже повёрнутый вправо на 90°, исправляется на 270°. "
+        "Это не поворот оригинала и не изменение его состава.",
+    )
 
 
 class DocumentProcessing(StrictModel):

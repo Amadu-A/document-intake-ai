@@ -262,6 +262,24 @@ class Analyze:
         selection: DocumentClassification | None = None,
     ) -> DetailedFacts:
         """Извлекает факты всей группы; большие комплекты согласует повторным VLM-проходом."""
+        turns = (
+            {(p.file_id, p.page_number): p.clockwise_degrees for p in selection.page_rotations}
+            if selection
+            else {}
+        )
+        if any(
+            turns.get((p["file_id"], p["page_number"]), 0) != p.get("ocr_rotation", 0)
+            for p in pages
+        ):
+            pages = [
+                {**p, "ocr_rotation": turns.get((p["file_id"], p["page_number"]), 0)} for p in pages
+            ]
+
+            async def normalized_emit(kind: str, data: dict) -> None:
+                """Повтор OCR того же блока не сбрасывает завершённый глобальный счётчик страниц."""
+                await emit("ocr_normalization_progress" if kind == "ocr_progress" else kind, data)
+
+            pages = await self.ocr.recognize(pages, normalized_emit)
         organization = canonical_organization(job.organization_hint)
         schema = extraction_schema(
             organization,

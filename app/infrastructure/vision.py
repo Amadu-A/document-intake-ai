@@ -16,13 +16,26 @@ from app.domain.errors import IntakeError
 from app.infrastructure.vision_stream import JSONWhitespaceGuard
 
 
-def footer_view(data: bytes) -> bytes:
+def footer_view(data: bytes, *, header: bool = False) -> bytes:
     """Показывает нижнюю треть проверенного рендера отдельно, без изменения цифр и масштаба."""
     with Image.open(BytesIO(data)) as image:
-        with image.crop((0, image.height * 2 // 3, image.width, image.height)) as detail:
+        box = (
+            (0, 0, image.width, image.height * 2 // 5)
+            if header
+            else (0, image.height * 2 // 3, image.width, image.height)
+        )
+        with image.crop(box) as detail:
             output = BytesIO()
             detail.save(output, format="PNG")
             return output.getvalue()
+
+
+def oriented_view(data: bytes, clockwise: int) -> bytes:
+    """Поворачивает только безопасный PNG для vision, сохраняя оригинал и адрес страницы."""
+    with Image.open(BytesIO(data)) as original, original.rotate(-clockwise, expand=True) as turned:
+        output = BytesIO()
+        turned.save(output, format="PNG")
+        return output.getvalue()
 
 
 def strict_json(value: str) -> dict:
@@ -65,6 +78,8 @@ class SharedVision:
         content = [{"type": "text", "text": json.dumps(context, ensure_ascii=False)}]
         for page in pages:
             data = await asyncio.to_thread(Path(page["preview"]).read_bytes)
+            if page.get("ocr_rotation"):
+                data = await asyncio.to_thread(oriented_view, data, page["ocr_rotation"])
             content.extend(
                 [
                     {
@@ -89,8 +104,8 @@ class SharedVision:
                 detail_path = page.get("header_preview") if header else page.get("footer_preview")
                 detail = (
                     await asyncio.to_thread(Path(detail_path).read_bytes)
-                    if detail_path
-                    else await asyncio.to_thread(footer_view, data)
+                    if detail_path and not page.get("ocr_rotation")
+                    else await asyncio.to_thread(footer_view, data, header=bool(header))
                 )
                 content.extend(
                     [

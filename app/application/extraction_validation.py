@@ -86,6 +86,14 @@ def validate_details(
                 "schema_validation_failed",
                 "Счёт на оплату — payment_request, не подтверждение исполнения",
             )
+        if kind in {
+            "счет-фактура",
+            "корректировочный счет-фактура",
+        } and value.details.primary_document_role not in {None, "tax"}:
+            raise IntakeError(
+                "schema_validation_failed",
+                "Счёт-фактура относится к tax, не к primary/payment_request",
+            )
         if (
             value.details.primary_document_type is not None
             and value.details.primary_document_type != value.classification.document_kind
