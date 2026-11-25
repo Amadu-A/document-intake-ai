@@ -54,7 +54,7 @@ async def test_confirmed_backlog_does_not_grow_while_worker_is_busy(delivery_lab
         }
     )
     assert after["messages_ready"] == 1
-    assert after["messages_unacknowledged"] == 1
+    assert after["messages_unacknowledged"] == 0
     await lab.release(first.id)
     await lab.wait_status(first.id, "completed")
     await lab.wait_status(second.id, "running")
@@ -117,7 +117,7 @@ async def test_connection_failure_and_broker_restart_preserve_confirmed_and_pend
 
 
 async def test_worker_sigkill_and_all_container_restarts_recover_without_lost_jobs(delivery_lab):
-    """SIGKILL до ack и restart контейнеров сохраняют backlog и fencing recovery."""
+    """SIGKILL после claim/ACK и restart контейнеров сохраняют backlog и fencing recovery."""
     lab = delivery_lab
     first = await lab.job()
     worker = await asyncio.to_thread(lab.worker)

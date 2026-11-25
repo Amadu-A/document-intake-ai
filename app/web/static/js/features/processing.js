@@ -17,12 +17,14 @@ export function renderProcessing(data, { uploading = false, cancelling = false, 
   const review = status === "awaiting_confirmation";
   const manual = segmentation.segmentation_source?.startsWith("manual");
   const ready = status === "uploaded" && data.preview_complete;
+  const waiting = status === "queued" || status === "uploaded" && !data.preview_complete && ["upload", "queued"].includes(data.stage);
   const confirmVisible = review || ready && manual;
   let title = "Выберите документы", description = "Анализ не запущен", counter = null, current = null;
   if (uploading) { title = "Загружаем документы"; description = "Передаём файлы и подготавливаем страницы"; current = "preview"; }
   else if (data && !data.preview_complete) { title = "Подготавливаем страницы"; current = "preview"; counter = { completed: data.pages_ready, total: data.pages_total }; }
   else if (ready) { title = "Документы готовы к анализу"; description = "Нажмите «Запустить анализ»"; }
-  if (status === "queued" || starting) { title = "Ожидаем начала обработки"; description = "Задание поставлено в очередь"; counter = null; }
+  if (waiting || starting) { title = "Ожидает начала обработки"; description = "Задание поставлено в очередь. Подготовка и анализ ещё не начались"; counter = null; current = null; }
+  if (status === "running") { title = "Обработка выполняется"; description = "Задание принято worker"; }
   if (status === "running" && active === "ocr") { title = "Распознаём текст документов"; counter = counters.ocr; current = "ocr"; description = "OCR выполняется"; }
   if (status === "running" && active === "boundaries") { title = "Определяем границы документов"; counter = data.comparisons; current = "boundaries"; description = "Сравниваем соседние страницы"; }
   if (status === "running" && active === "extraction") { title = "Извлекаем реквизиты"; counter = counters.extraction; current = "extraction"; description = "Анализируем утверждённые документы"; }
@@ -35,7 +37,7 @@ export function renderProcessing(data, { uploading = false, cancelling = false, 
     const incomplete = documents.filter(p => ["classification_failed", "extraction_failed"].includes(p.status)).length;
     description = `Распознано документов: ${supported}. Требуют проверки: ${incomplete + unsupported}. PDF всех блоков готовы.`;
   }
-  if (status === "failed" || error || unavailable) { title = "Не удалось завершить обработку"; description = data?.error?.message || error || "Задание недоступно. Создайте новый пакет."; counter = null; }
+  if (status === "failed" || error || unavailable) { title = "Не удалось завершить обработку"; description = data?.error?.message || error || "Задание недоступно. Создайте новый пакет."; counter = null; current = null; }
   if (cancelling) { title = "Отменяем обработку"; description = "Ожидаем подтверждения остановки"; counter = null; }
   else if (status === "cancelled") { title = "Обработка отменена"; description = "Можно начать новый пакет"; counter = null; }
   const validCounter = counter && Number.isInteger(counter.total) && counter.total > 0 && Number.isInteger(counter.completed) && counter.completed >= 0 && counter.completed <= counter.total;
@@ -48,7 +50,7 @@ export function renderProcessing(data, { uploading = false, cancelling = false, 
   else progress.removeAttribute("value");
   get("[data-processing-title]").textContent = title;
   get("[data-processing-description]").textContent = description;
-  const caption = uploading ? "Загружаем" : cancelling ? "Остановка задания" : status === "failed" || error ? "Ошибка" : status === "cancelled" ? "Отменено" : success ? "Результат готов" : review || ready && manual ? "Требуется подтверждение" : ready ? "Готово к анализу" : data && !data.preview_complete ? "Подготавливаем" : status === "running" ? ({ocr:"Распознаём",boundaries:"Проверяем границы",extraction:"Извлекаем"}[active] || "Обрабатываем") : statusNames[status] || "Анализ не запущен";
+  const caption = uploading ? "Загружаем" : cancelling ? "Остановка задания" : status === "failed" || error ? "Ошибка" : status === "cancelled" ? "Отменено" : success ? "Результат готов" : waiting ? "Ожидает начала обработки" : review || ready && manual ? "Требуется подтверждение" : ready ? "Готово к анализу" : data && !data.preview_complete ? "Подготавливаем" : status === "running" ? ({ocr:"Распознаём",boundaries:"Проверяем границы",extraction:"Извлекаем"}[active] || "Обрабатываем") : statusNames[status] || "Анализ не запущен";
   get("[data-processing-status]").textContent = caption;
   get("[data-processing]").classList.toggle("processing--error", status === "failed" || !!error);
   get("[data-processing]").classList.toggle("processing--success", !error && (success || ready && !manual));

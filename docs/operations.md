@@ -1,6 +1,26 @@
 <!-- docs/operations.md -->
 # Развёртывание и проверки
 
+Обновление 25.11.2026: ACK перенесён после транзакционного claim и до OCR/VLM;
+подписка каждого свободного slot получает одно сообщение, отменяется до ACK и
+не удерживает следующий пакет. Shared RabbitMQ, consumer_timeout, Docling/VLM
+и WORKER_CONCURRENCY менять не требуется. Миграций/новых секретов нет.
+QUEUE_TIMEOUT_SECONDS теперь 14400 с: если в окружении или собственном `.env`
+остался явный override 1800, он имеет приоритет. Проверьте только этот параметр,
+не переписывая секреты. Новое значение применяется к новым бюджетам, старые
+сохранённые deadlines не продлеваются задним числом.
+Различаются queue_timeout (ожидание), preview_timeout (подготовка), job_timeout
+(анализ), worker_attempts_exhausted (восстановления). UI до claim показывает
+«Ожидает начала обработки», без вымышленного прогресса OCR.
+Readiness принимает живую PG-lease при занятом worker без подписки, но никогда
+не маскирует недоступность самого брокера.
+
+Перед обновлением дождитесь завершения активных пакетов или осознанно отмените их:
+up.sh пересоздаёт собственный worker. Истёкшие задания не оживляются обновлением.
+Проверки до/после и ограничения: [доставка](../reports/2026-11-25-delivery.md),
+[реестр](../reports/2026-11-25-registry.md). После обновления проверить `/integration/1c`,
+Swagger и реальный GET реестра в JSON/XLSX. Новая зависимость openpyxl закреплена в uv.lock.
+
 Обновление 19.11.2026: новые таблицы/миграции не нужны, JSON-checkpoints уже хранят
 типизированный v2. Старые готовые результаты v1 не переинтерпретируются в v2.
 Перед первым запуском обновлённой версии удалите только прежние несекретные overrides
@@ -188,7 +208,8 @@ Offline tests требуют `uv` и Python 3.12–3.14. `up.sh` не требу
 диапазонов). Если что-то отсутствует, это FAIL,
 а не успешный skip. Частные сравнения/замеры сохраняются в игнорируемый `reports/local/`.
 
-Отдельная проверка доставки: `bash scripts/test.sh --live -s tests/test_delivery_live.py`.
+Отдельная проверка доставки:
+`bash scripts/test.sh --live -s tests/test_delivery_live.py tests/test_ack_timeout_live.py`.
 Нужен доступ к локальному Docker и заранее загруженные образы `rabbitmq:4.1-management`,
 `postgres:16.15-alpine`, `document-intake-ai:local` (образ обычного `up.sh`).
 Другой готовый образ окружения указывается флагом `--delivery-image=имя:тег`.
@@ -199,6 +220,10 @@ loopback-портами и случайными secrets; shared стек и `.en
 длительная бизнес-операция. Это проверка реальной доставки/PG/AMQP, а не качества AI.
 Сценарии: backlog более 30 с, потеря настоящего AMQP confirm, разрыв соединения,
 SIGKILL worker и restart PG/RabbitMQ/worker с сохранёнными volumes.
+Дополнительно: изолированный consumer_timeout=60000 мс, работа дольше 130 с,
+одна активная/три ожидающих, аварии до claim/до ACK/после ACK,
+обрыв соединения между commit и ACK, продолжение checkpoint.
+Проверка занимает несколько минут; shared consumer_timeout не изменяется.
 
 Частный счёт-фактура: `bash scripts/test.sh --live tests/test_upd_example.py`.
 Нужны пять `examples/УПД.*` из ТЗ и доступные Docling/shared-VLM через Settings;
@@ -313,7 +338,7 @@ Ctrl/Cmd или Shift. У края лента прокручивается ав�
 `UPLOAD_MAX_FILE_PAGES=1000`, `DOCUMENT_MAX_MB=400`, `DOCUMENT_MAX_PAGES=1000`,
 `UPLOAD_MAX_MB=1024`, `UPLOAD_MAX_PAGES=2000`, `UPLOAD_MAX_FILES=20`.
 Файл и комплект ограничены независимо от пачки. Значения MiB, не десятичные MB.
-Queue — 1800 с, preview — 3600 с, processing — 14400 с по умолчанию;
+Queue — 14400 с, preview — 3600 с, processing — 14400 с по умолчанию;
 waiting — до 86400 с после готовности состава (для одной подготовки — preview_ready),
 terminal retention — 86400 с.
 `STORAGE_MIN_FREE_MB=1024` оставляет резерв. Реальное место включает оригиналы,

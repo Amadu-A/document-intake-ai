@@ -212,7 +212,7 @@ async def test_manual_first_atomic_mode_exclusion_and_fixed_pdf_groups(client, c
     """Подготовка не трогает AI; ручные страницы/исключение сохраняются в PDF и manifest."""
     data = await create(client, endpoint="uploads", pages=5)
     job_id = data["job_id"]
-    assert data["status"] == "uploaded" and data["stage"] == "preparing_preview"
+    assert data["status"] == "uploaded" and data["stage"] == "queued"
     denied = await client.post(
         f"/api/v1/jobs/{job_id}/segmentation/confirm", headers=KEY, json={"expected_revision": 0}
     )

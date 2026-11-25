@@ -1,0 +1,16 @@
+<!-- app/web/templates/integration.html -->
+<!-- Публичная инструкция из единственного Markdown-источника; содержимое экранирует Jinja. -->
+{% extends 'base.html' %}
+{% block scripts %}{% endblock %}
+{% block header_actions %}<a class="button" href="/">К обработке документов</a>{% endblock %}
+{% block content %}
+<article class="documentation" aria-labelledby="integration-title">
+  <h1 id="integration-title">Инструкция программисту 1С</h1>
+  <nav class="documentation__links" aria-label="Материалы интеграции">
+    <a href="/docs">Swagger</a>
+    <a href="/openapi.json">OpenAPI JSON</a>
+    <a href="/integration/1c.md">Скачать инструкцию Markdown</a>
+  </nav>
+  <pre class="documentation__text">{{ instruction }}</pre>
+</article>
+{% endblock %}

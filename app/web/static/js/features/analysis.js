@@ -6,6 +6,7 @@ import { renderPlan, renderFacts, journal } from "./results.js";
 import { createBoundaryEditor } from "./boundaries.js";
 import { renderProcessing } from "./processing.js";
 import { createArchive } from "./archive.js";
+import { createRegistry } from "./registry.js";
 import { initializeHistory } from "./history.js";
 
 const terminal = new Set(["completed", "completed_with_warnings", "failed", "cancelled"]);
@@ -18,6 +19,7 @@ export function initializeAnalysis(viewer) {
   let generation = 0, fetching = null, stopped = false, uploading = false, cancelling = false, exported = false;
   let starting = false, transportError = null, cancelError = null;
   let archive = null;
+  let registry = null;
   let reads = new AbortController();
   const get = selector => document.querySelector(selector);
   const start = get("[data-start]"), input = get("[data-files]"), organization = get("[data-organization]"), json = get("[data-json]");
@@ -27,10 +29,12 @@ export function initializeAnalysis(viewer) {
     if (own === generation) await refresh();
   }, paint);
   archive = createArchive(get("[data-cut-download]"), () => boundaries.confirm(), () => { exported = true; });
+  registry = createRegistry(get("[data-registry-download]"));
   function paint() {
     /** Перерисовывает панель из того же snapshot, что используют просмотр и редактор. */
     renderProcessing(snapshot, { uploading, cancelling, starting, pending: boundaries.pending(), confirmed: !!confirmed, error: transportError, unavailable: stopped });
     archive?.update(snapshot, boundaries.pending() || uploading || cancelling || stopped);
+    registry?.update(snapshot, boundaries.pending() || uploading || cancelling || stopped);
   }
   const current = (own, id) => own === generation && id === jobId;
   initializeHistory(async id => {
@@ -48,7 +52,7 @@ export function initializeAnalysis(viewer) {
   }
   function reset() {
     /** Полностью освобождает пакет без перезагрузки страницы. */
-    generation++; close(); archive.reset(); jobId = null; snapshot = confirmed = null; cursor = 0; raw = "";
+    generation++; close(); archive.reset(); registry.reset(); jobId = null; snapshot = confirmed = null; cursor = 0; raw = "";
     fetching = null; stopped = uploading = cancelling = exported = starting = false; transportError = cancelError = null;
     sessionStorage.removeItem("intake_job"); input.value = ""; input.disabled = false;
     organization.value = ""; organization.disabled = false; start.disabled = true;

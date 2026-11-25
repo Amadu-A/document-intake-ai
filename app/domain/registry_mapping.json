@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0",
+  "column_order": ["number", "date", "delivery_method", "receipt_city", "recipient", "document_name", "sender", "document_number", "opening_date", "scanning_date", "registration_date", "responsible", "notes", "document_link"],
+  "columns": {
+    "number": ["№", false],
+    "date": ["Дата получения", false],
+    "delivery_method": ["Способ получения (Почта / Курьер)", "requisites.delivery_channel"],
+    "receipt_city": ["Город получения", false],
+    "recipient": ["Получатель", "requisites.recipient.name"],
+    "document_name": ["Название документа", "classification.document_kind"],
+    "sender": ["Отправитель", "requisites.sender.name"],
+    "document_number": ["№ документа", ["requisites.document_number", "requisites.document_date"]],
+    "opening_date": ["Дата вскрытия", false],
+    "scanning_date": ["Дата сканирования", false],
+    "registration_date": ["Дата внесения в 1С", false],
+    "responsible": ["Ответственный (ОМ / Администратор)", false],
+    "notes": ["Примечания", false],
+    "document_link": ["Ссылка на документ в ДО", false]
+  }
+}

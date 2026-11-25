@@ -116,6 +116,14 @@ class Database(BoundaryTransactions):
         job.cursor += 1
         row.status = job.status
         row.data = job.model_dump(mode="json")
+        if kind in {"created", "queued", "confirmed", "started", "retry", "terminal", "delivery"}:
+            data = {
+                "timestamp": utcnow().isoformat(),
+                "fence": job.fence,
+                "attempt": job.attempt,
+                "phase": job.work_kind,
+                **data,
+            }
         session.add(EventRow(job_id=job.id, sequence=job.cursor, kind=kind, data=data))
 
     def _terminal(self, session, row: JobRow, job: Job, status: str, error: dict | None) -> None:
@@ -201,6 +209,7 @@ class Database(BoundaryTransactions):
                     return existing, False
             await self._admit(session, job.owner)
             if job.status == "queued" or job.work_kind == "prepare":
+                job.stage = "queued"
                 job.queue_deadline_at = utcnow() + timedelta(
                     seconds=self.settings.queue_timeout_seconds
                 )
@@ -315,11 +324,12 @@ class Database(BoundaryTransactions):
                     row,
                     job,
                     "failed",
-                    {"code": "job_timeout", "message": "Превышено время ожидания/обработки"},
+                    job.timeout_error(),
                 )
                 return None
             job.fence += 1
             job.attempt += 1
+            job.stage = "preparing_preview" if not job.preview_complete else "processing"
             if job.work_kind != "prepare":
                 job.status = "running"
             job.queue_deadline_at = None
@@ -349,6 +359,29 @@ class Database(BoundaryTransactions):
                 )
             ).first()
             return bool(row and row[1] == fence and row[0] in {"running", "uploaded"})
+
+    async def has_active_work(self) -> bool:
+        """Проверяет живой вычислительный slot, когда consumer приостановлен после раннего ACK."""
+        async with self.sessions() as session:
+            return bool(
+                await session.scalar(
+                    select(JobRow.id)
+                    .where(
+                        JobRow.status.in_(("running", "uploaded")),
+                        JobRow.lease_until > utcnow(),
+                    )
+                    .limit(1)
+                )
+            )
+
+    async def delivery_event(self, job_id: str, fence: int, operation: str, outcome: str) -> None:
+        """Пишет owner-защищённое событие handoff только для текущего поколения."""
+        async with self._transaction() as session:
+            row, job = await self._locked(session, job_id)
+            if job.fence == fence and job.status not in TERMINAL:
+                self._write(
+                    session, row, job, "delivery", {"operation": operation, "outcome": outcome}
+                )
 
     async def heartbeat(self, job_id: str, fence: int) -> bool:
         """Продлевает lease только живого поколения в пределах общего deadline."""
@@ -568,15 +601,18 @@ class Database(BoundaryTransactions):
                             row,
                             job,
                             "failed",
-                            {
-                                "code": "job_timeout" if deadline else "worker_attempts_exhausted",
-                                "message": "Исчерпан лимит времени или восстановлений worker",
+                            job.timeout_error()
+                            if deadline
+                            else {
+                                "code": "worker_attempts_exhausted",
+                                "message": "Исчерпан лимит восстановлений worker",
                             },
                         )
                         await session.execute(delete(SignalRow).where(SignalRow.job_id == job.id))
                     elif stale:
                         job.fence += 1
                         job.status = "uploaded" if job.work_kind == "prepare" else "queued"
+                        job.stage = "queued"
                         row.lease_until = None
                         self._write(session, row, job, "retry", {"attempt": job.attempt})
                         if not await session.get(SignalRow, job.id):

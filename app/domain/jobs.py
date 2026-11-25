@@ -103,6 +103,17 @@ class Job(StrictModel):
             for n in range(1, counts.get(s.file_id, s.page_count) + 1)
         ]
 
+    def timeout_error(self) -> dict[str, str]:
+        """Различает истёкший бюджет ожидания, превью и анализа без сброса сохранённых сроков."""
+        if self.queue_deadline_at is not None or self.attempt == 0:
+            return {
+                "code": "queue_timeout",
+                "message": "Превышено время ожидания в очереди. Обработка не началась",
+            }
+        if not self.preview_complete:
+            return {"code": "preview_timeout", "message": "Превышено время подготовки страниц"}
+        return {"code": "job_timeout", "message": "Превышено время анализа"}
+
     def authorize(self, owner: str) -> None:
         """Скрывает чужое задание и немедленно закрывает доступ по истечении TTL."""
         if self.owner != owner:

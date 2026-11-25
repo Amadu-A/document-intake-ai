@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, Header, Query, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.formparsers import MultiPartException
@@ -19,12 +19,14 @@ from app.domain.errors import IntakeError
 from app.domain.extractions import DetailedResult
 from app.domain.jobs import TERMINAL, utcnow
 from app.domain.plan_edits import PlanEdit
+from app.domain.registry import XLSX_MIME, RegistryMappingView, RegistryResult
 from app.domain.schema import BatchResult
 from app.domain.segmentation import PageRef
 from app.presentation.http.contracts import (
     ERROR_RESPONSES,
     ArchiveView,
     DocumentManifest,
+    ErrorResponse,
     JobList,
     PageSlice,
     PromptView,
@@ -334,6 +336,96 @@ async def result(job_id: str, container: Services, owner: Owner):
 async def extractions(job_id: str, container: Services, owner: Owner):
     """Возвращает отдельный JSON 2.0 с профилями и evidence; до готовности/для старого v1 — 409."""
     return await container.exports.extractions(job_id, owner)
+
+
+@router.get(
+    "/registry/schema",
+    response_model=RegistryMappingView,
+    tags=["Реестр документов"],
+    summary="Получить порядок колонок и источники реестра",
+)
+async def registry_schema(container: Services, owner: Owner):
+    """Отдаёт единый каталог без документных данных авторизованному клиенту."""
+    return await container.registry.schema()
+
+
+@router.get(
+    "/jobs/{job_id}/registry",
+    response_model=RegistryResult,
+    tags=["Реестр документов"],
+    summary="Получить реестр сохранённых документов",
+    responses={
+        409: {
+            "model": ErrorResponse,
+            "description": "Реестр доступен после извлечения реквизитов",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": {
+                            "code": "registry_not_ready",
+                            "message": "Реестр доступен после извлечения реквизитов",
+                        }
+                    }
+                }
+            },
+        }
+    },
+)
+async def registry_result(job_id: str, container: Services, owner: Owner):
+    """Не запускает обработку: проецирует подтверждённый v1 текущего owner с проверкой TTL."""
+    return await container.registry.result(job_id, owner)
+
+
+@router.get(
+    "/jobs/{job_id}/registry.xlsx",
+    response_class=Response,
+    tags=["Реестр документов"],
+    summary="Скачать реестр документов XLSX",
+    responses={
+        **file_responses(XLSX_MIME, signed=False),
+        409: {
+            "model": ErrorResponse,
+            "description": "Реестр доступен после извлечения реквизитов",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": {
+                            "code": "registry_not_ready",
+                            "message": "Реестр доступен после извлечения реквизитов",
+                        }
+                    }
+                }
+            },
+        },
+        503: {
+            "model": ErrorResponse,
+            "description": "Временный отказ экспорта; повторить GET без нового анализа",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": {
+                            "code": "registry_export_failed",
+                            "message": "Не удалось сформировать реестр. Повторите скачивание",
+                        }
+                    }
+                }
+            },
+        },
+    },
+)
+async def registry_xlsx(job_id: str, container: Services, owner: Owner):
+    """Отдаёт авторизованную книгу без публичного URL и без изменения готового задания."""
+    job, artifact = await container.registry.xlsx(job_id, owner)
+    headers = {
+        "Content-Disposition": f"attachment; filename*=UTF-8''{quote(artifact['file_name'])}",
+        "Content-Length": str(artifact["byte_size"]),
+        "X-Content-SHA256": artifact["sha256"],
+        "Cache-Control": "private",
+        "Referrer-Policy": "no-referrer",
+    }
+    if job.expires_at:
+        headers["X-Expires-At"] = job.expires_at.isoformat()
+    return Response(artifact["content"], media_type=artifact["mime_type"], headers=headers)
 
 
 @router.get("/jobs", response_model=JobList)

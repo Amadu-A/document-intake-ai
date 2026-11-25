@@ -3,6 +3,8 @@
 
 Пошаговые HTTP-запросы загрузки, серверного редактора, утверждения и JSON 1/2:
 [полный интеграционный сценарий](integration-workflow.md).
+Инструкция программисту 1С: [Markdown](API_1C_document_intake.md),
+на сервере — `/integration/1c` (ссылка внизу Web), скачивание — `/integration/1c.md`.
 
 Базовый адрес: `APP_PUBLIC_BASE_URL`, по умолчанию `http://192.168.55.3:8084`.
 Swagger и его JS/CSS обслуживаются локально на `/docs`, контракт — `/openapi.json`.
@@ -64,6 +66,9 @@ checksum, byte length и запрет доступа после истечени
 | `GET /api/v1/jobs/{id}/documents/{document_id}/file` | Целый PDF-комплект регистрации |
 | `POST /api/v1/jobs/{id}/archive` | Подготовить ZIP; `file_name`, `byte_size`, `sha256`, подписанный `file_url` |
 | `GET /api/v1/jobs/{id}/archive` | Скачать ZIP всех готовых PDF по owner/подписи |
+| `GET /api/v1/jobs/{id}/registry` | RegistryResult 1.0 из сохранённых v1-фактов; без нового анализа |
+| `GET /api/v1/jobs/{id}/registry.xlsx` | Реестр документов.xlsx, 14 колонок; только owner, без signed URL |
+| `GET /api/v1/registry/schema` | Версия, порядок и источники 14 колонок |
 | `GET /api/v1/jobs/{id}/documents/{document_id}/manifest` | Полное происхождение страниц и группа VLM |
 | `GET /api/v1/jobs/{id}/pages/{file_id}/{page}/preview` | Безопасный PNG-render |
 | `GET/PUT /api/v1/session/prompts` | Два текста, базовые версии/тексты текущего owner |
@@ -175,7 +180,8 @@ revision: только одно успешно, второе `409 plan_version_c
 После lock изменение режима/состава даёт `409 plan_locked`.
 
 `/uploads` сразу ставит `work_kind=prepare`: снаружи `uploaded`,
-`stage=preparing_preview`, затем `preview_ready`. Первые PNG доступны прогрессивно.
+`stage=queued` до claim, затем `preparing_preview` и `preview_ready`.
+Первые PNG доступны прогрессивно.
 Start во время подготовки фиксирует намерение запустить анализ, подготовка не повторяется.
 Review освобождает worker/lease; после confirm используются OCR checkpoints и исходное
 предложение. Для ручных групп VLM извлекает внутренние приложения, сохраняя их страницы.

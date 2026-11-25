@@ -259,11 +259,15 @@ ERROR_RESPONSES = {
 }
 
 
-def file_responses(mime: str) -> dict:
+def file_responses(mime: str, *, signed: bool = True) -> dict:
     """Документирует потоковый файл и реальные заголовки целостности/TTL."""
     return {
         200: {
-            "description": "Поток файла по owner либо временной подписанной ссылке",
+            "description": (
+                "Поток файла по owner либо временной подписанной ссылке"
+                if signed
+                else "Файл только по X-API-Key либо собственной web-сессии; без signed URL"
+            ),
             "content": {mime: {"schema": {"type": "string", "format": "binary"}}},
             "headers": {
                 "Content-Disposition": {"schema": {"type": "string"}},

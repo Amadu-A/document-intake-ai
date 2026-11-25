@@ -3129,6 +3129,665 @@
         }
       }
     },
+    "/api/v1/registry/schema": {
+      "get": {
+        "tags": [
+          "Документы",
+          "Реестр документов"
+        ],
+        "summary": "Получить порядок колонок и источники реестра",
+        "description": "Отдаёт единый каталог без документных данных авторизованному клиенту.",
+        "operationId": "registry_schema_api_v1_registry_schema_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryMappingView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Требуется корректный X-API-Key либо web-сессия",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "access_denied",
+                    "message": "Требуется корректный X-API-Key либо web-сессия"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Не подтверждены Origin/CSRF или доступ к файлу",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "access_denied",
+                    "message": "Не подтверждены Origin/CSRF или доступ к файлу"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Объект не найден либо принадлежит другому owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "job_not_found",
+                    "message": "Объект не найден либо принадлежит другому owner"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Конфликт revision, план locked либо результат ещё не готов",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "plan_version_conflict",
+                    "message": "Конфликт revision, план locked либо результат ещё не готов"
+                  }
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Срок хранения истёк: ссылки и файлы недоступны",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "job_expired",
+                    "message": "Срок хранения истёк: ссылки и файлы недоступны"
+                  }
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Истёк ограниченный срок приёма запроса",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "upload_timeout",
+                    "message": "Истёк ограниченный срок приёма запроса"
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Превышен лимит загрузки",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "upload_limit",
+                    "message": "Превышен лимит загрузки"
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Неверный формат запроса или нарушение контракта страниц",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "invalid_request",
+                    "message": "Неверный формат запроса или нарушение контракта страниц"
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Исчерпан бюджет запросов; учитывать Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "rate_limit",
+                    "message": "Исчерпан бюджет запросов; учитывать Retry-After"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Зависимость/сервис временно недоступны",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "service_unavailable",
+                    "message": "Зависимость/сервис временно недоступны"
+                  }
+                }
+              }
+            }
+          },
+          "507": {
+            "description": "Недостаточно свободного места для загрузки/сборки файла",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "storage_insufficient",
+                    "message": "Недостаточно свободного места для загрузки/сборки файла"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/api/v1/jobs/{job_id}/registry": {
+      "get": {
+        "tags": [
+          "Документы",
+          "Реестр документов"
+        ],
+        "summary": "Получить реестр сохранённых документов",
+        "description": "Не запускает обработку: проецирует подтверждённый v1 текущего owner с проверкой TTL.",
+        "operationId": "registry_result_api_v1_jobs__job_id__registry_get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Требуется корректный X-API-Key либо web-сессия",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "access_denied",
+                    "message": "Требуется корректный X-API-Key либо web-сессия"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Не подтверждены Origin/CSRF или доступ к файлу",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "access_denied",
+                    "message": "Не подтверждены Origin/CSRF или доступ к файлу"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Объект не найден либо принадлежит другому owner",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "job_not_found",
+                    "message": "Объект не найден либо принадлежит другому owner"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Реестр доступен после извлечения реквизитов",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "registry_not_ready",
+                    "message": "Реестр доступен после извлечения реквизитов"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Срок хранения истёк: ссылки и файлы недоступны",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "job_expired",
+                    "message": "Срок хранения истёк: ссылки и файлы недоступны"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Истёк ограниченный срок приёма запроса",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "upload_timeout",
+                    "message": "Истёк ограниченный срок приёма запроса"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Превышен лимит загрузки",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "upload_limit",
+                    "message": "Превышен лимит загрузки"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Неверный формат запроса или нарушение контракта страниц",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "invalid_request",
+                    "message": "Неверный формат запроса или нарушение контракта страниц"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Исчерпан бюджет запросов; учитывать Retry-After",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "rate_limit",
+                    "message": "Исчерпан бюджет запросов; учитывать Retry-After"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Зависимость/сервис временно недоступны",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "service_unavailable",
+                    "message": "Зависимость/сервис временно недоступны"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "507": {
+            "description": "Недостаточно свободного места для загрузки/сборки файла",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "storage_insufficient",
+                    "message": "Недостаточно свободного места для загрузки/сборки файла"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{job_id}/registry.xlsx": {
+      "get": {
+        "tags": [
+          "Документы",
+          "Реестр документов"
+        ],
+        "summary": "Скачать реестр документов XLSX",
+        "description": "Отдаёт авторизованную книгу без публичного URL и без изменения готового задания.",
+        "operationId": "registry_xlsx_api_v1_jobs__job_id__registry_xlsx_get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Файл только по X-API-Key либо собственной web-сессии; без signed URL",
+            "content": {
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            },
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Length": {
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-Content-SHA256": {
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "X-Expires-At": {
+                "schema": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Требуется корректный X-API-Key либо web-сессия",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "access_denied",
+                    "message": "Требуется корректный X-API-Key либо web-сессия"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Не подтверждены Origin/CSRF или доступ к файлу",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "access_denied",
+                    "message": "Не подтверждены Origin/CSRF или доступ к файлу"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Объект не найден либо принадлежит другому owner",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "job_not_found",
+                    "message": "Объект не найден либо принадлежит другому owner"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Реестр доступен после извлечения реквизитов",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "registry_not_ready",
+                    "message": "Реестр доступен после извлечения реквизитов"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Срок хранения истёк: ссылки и файлы недоступны",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "job_expired",
+                    "message": "Срок хранения истёк: ссылки и файлы недоступны"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Истёк ограниченный срок приёма запроса",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "upload_timeout",
+                    "message": "Истёк ограниченный срок приёма запроса"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Превышен лимит загрузки",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "upload_limit",
+                    "message": "Превышен лимит загрузки"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Неверный формат запроса или нарушение контракта страниц",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "invalid_request",
+                    "message": "Неверный формат запроса или нарушение контракта страниц"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Исчерпан бюджет запросов; учитывать Retry-After",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "rate_limit",
+                    "message": "Исчерпан бюджет запросов; учитывать Retry-After"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Временный отказ экспорта; повторить GET без нового анализа",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "registry_export_failed",
+                    "message": "Не удалось сформировать реестр. Повторите скачивание"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "507": {
+            "description": "Недостаточно свободного места для загрузки/сборки файла",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "storage_insufficient",
+                    "message": "Недостаточно свободного места для загрузки/сборки файла"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/jobs/{job_id}/cancel": {
       "post": {
         "tags": [
@@ -9038,6 +9697,260 @@
         "type": "object",
         "title": "Recognition",
         "description": "Честная диагностика распознавания, отдельно от извлечённых фактов."
+      },
+      "RegistryMappingView": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "1.0",
+            "title": "Schema Version"
+          },
+          "column_order": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Column Order"
+          },
+          "columns": {
+            "additionalProperties": {
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "boolean",
+                      "const": false
+                    },
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                }
+              ],
+              "type": "array",
+              "maxItems": 2,
+              "minItems": 2
+            },
+            "type": "object",
+            "title": "Columns"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schema_version",
+          "column_order",
+          "columns"
+        ],
+        "title": "RegistryMappingView",
+        "description": "Публичный ordered mapping: заголовок и false/путь/список путей источников документа."
+      },
+      "RegistryResult": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "1.0",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RegistryRow"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "job_id",
+          "items"
+        ],
+        "title": "RegistryResult",
+        "description": "Версия относится к реестру; исходные схемы 1.0/2.0 сохраняются."
+      },
+      "RegistryRow": {
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Document Id"
+          },
+          "number": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Number"
+          },
+          "date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date"
+          },
+          "delivery_method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Method"
+          },
+          "receipt_city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Receipt City"
+          },
+          "recipient": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recipient"
+          },
+          "document_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Name"
+          },
+          "sender": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sender"
+          },
+          "document_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Number"
+          },
+          "opening_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opening Date"
+          },
+          "scanning_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scanning Date"
+          },
+          "registration_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registration Date"
+          },
+          "responsible": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Responsible"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "document_link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Link"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "document_id",
+          "number"
+        ],
+        "title": "RegistryRow",
+        "description": "Одна регистрация; ручные поля неизвестны, document_id не является колонкой Excel."
       },
       "RelatedEntities": {
         "properties": {

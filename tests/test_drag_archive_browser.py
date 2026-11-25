@@ -70,9 +70,13 @@ async def test_mouse_drop_autoscroll_cancel_and_archive_use_server_approved_orde
                 "() => document.querySelector('[data-boundary-scroll]').scrollLeft > 1300",
                 timeout=10000,
             )
+            # Останавливаем непрерывную автопрокрутку до поиска виртуализированной карточки.
+            # В отличие от немедленного bounding_box(), expect дождётся её появления в DOM.
+            await page.mouse.move(scroll["x"] + scroll["width"] / 2, box["y"] + 50)
             target = page.locator('[data-page-key$=":20"]')
+            await expect(target).to_be_visible(timeout=10000)
             target_box = await target.bounding_box()
-            assert target_box
+            assert target_box is not None
             await page.mouse.move(target_box["x"] + 78, target_box["y"] + 90, steps=5)
             await expect(target).to_have_class(re.compile("drop-after"))
             await page.mouse.up()

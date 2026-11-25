@@ -7,7 +7,17 @@ from typing import Protocol
 
 from app.domain.boundaries import ManualPlan
 from app.domain.jobs import Job, Source
+from app.domain.registry import RegistryResult
 from app.domain.segmentation import PageRef
+
+
+class RegistryWriter(Protocol):
+    """Синхронный XLSX adapter, который application вызывает в отдельном потоке."""
+
+    def render(self, result: RegistryResult) -> bytes:
+        """Возвращает книгу из общего реестра без формул и внешних ссылок."""
+        ...
+
 
 Emit = Callable[[str, dict], Awaitable[None]]
 

@@ -9,6 +9,7 @@ from time import monotonic
 import pymupdf
 
 from app.domain.errors import IntakeError
+from app.infrastructure.messaging import NoConsumer
 
 
 def raster_probe(directory: Path) -> list[dict]:
@@ -49,7 +50,7 @@ class Health:
         checks = {}
         for name, check in (
             ("postgresql", self.database.ping),
-            ("consumer", self.rabbit.require_consumer),
+            ("consumer", self._consumer),
         ):
             try:
                 await asyncio.wait_for(check(), timeout=10)
@@ -69,6 +70,14 @@ class Health:
             "status": "ready" if all(v == "PASS" for v in checks.values()) else "not_ready",
             "checks": checks,
         }
+
+    async def _consumer(self) -> None:
+        """Требует подписку в idle или живой lease в busy; недоступный брокер не маскируется."""
+        try:
+            await self.rabbit.require_consumer()
+        except NoConsumer:
+            if not await self.database.has_active_work():
+                raise
 
     async def _contracts(self) -> dict:
         """Проверяет OCR растрового PDF и vision-маркер без встроенного текстового слоя."""

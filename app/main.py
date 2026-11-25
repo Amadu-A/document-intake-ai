@@ -1,6 +1,7 @@
 # app/main.py
 """FastAPI delivery: REST, SSE, health и Jinja2 без бизнес-логики в шаблонах."""
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -11,7 +12,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -24,6 +25,7 @@ from app.presentation.http.middleware import SecurityMiddleware
 from app.presentation.http.routes import router
 
 WEB = Path(__file__).with_name("web")
+ONE_C_GUIDE = Path(__file__).resolve().parents[1] / "docs/API_1C_document_intake.md"
 
 
 def create_app(container=None) -> FastAPI:
@@ -76,6 +78,25 @@ def create_app(container=None) -> FastAPI:
     async def documentation(request: Request):
         """Отдаёт Swagger со всеми локальными ресурсами и без inline JavaScript/CDN."""
         return templates.TemplateResponse(request=request, name="docs.html")
+
+    @application.get("/integration/1c", include_in_schema=False)
+    async def one_c_documentation(request: Request):
+        """Показывает единственный Markdown-источник как экранированный текст, без user payload."""
+        text = await asyncio.to_thread(ONE_C_GUIDE.read_text, "utf-8")
+        return templates.TemplateResponse(
+            request=request,
+            name="integration.html",
+            context={"instruction": text, "csrf_token": ""},
+        )
+
+    @application.get("/integration/1c.md", include_in_schema=False)
+    async def one_c_markdown():
+        """Скачивает статическую инструкцию без доступа к заданиям и внешней сети."""
+        return FileResponse(
+            ONE_C_GUIDE,
+            media_type="text/markdown; charset=utf-8",
+            filename="API_1C_document_intake.md",
+        )
 
     @application.exception_handler(IntakeError)
     async def domain_error(_request: Request, exc: IntakeError):

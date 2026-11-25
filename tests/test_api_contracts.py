@@ -1,3 +1,4 @@
+# tests/test_api_contracts.py
 """Публичный OpenAPI соответствует delivery-моделям и полному headless workflow."""
 
 import asyncio
@@ -5,6 +6,7 @@ import json
 from pathlib import Path
 
 from app.domain.extractions import DetailedResult
+from app.domain.registry import XLSX_MIME, RegistryResult
 
 
 async def test_openapi_models_security_defaults_binary_and_local_swagger(client):
@@ -45,6 +47,7 @@ async def test_openapi_models_security_defaults_binary_and_local_swagger(client)
         ("/api/v1/jobs/{job_id}/archive", "application/zip"),
         ("/api/v1/jobs/{job_id}/documents/{document_id}/file", "application/pdf"),
         ("/api/v1/jobs/{job_id}/events", "text/event-stream"),
+        ("/api/v1/jobs/{job_id}/registry.xlsx", XLSX_MIME),
     ):
         content = paths[path]["get"]["responses"]["200"]["content"]
         assert set(content) == {mime}
@@ -54,6 +57,15 @@ async def test_openapi_models_security_defaults_binary_and_local_swagger(client)
     assert DetailedResult.model_json_schema(mode="serialization") == json.loads(
         await asyncio.to_thread(Path("docs/result-v2.schema.json").read_text, "utf-8")
     )
+    assert RegistryResult.model_json_schema(mode="serialization") == json.loads(
+        await asyncio.to_thread(Path("docs/registry.schema.json").read_text, "utf-8")
+    )
+    RegistryResult.model_validate_json(
+        await asyncio.to_thread(Path("docs/samples/registry.json").read_text, "utf-8")
+    )
+    assert paths["/api/v1/jobs/{job_id}/registry"]["get"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"]["$ref"].endswith("/RegistryResult")
     docs = await client.get("/docs")
     assert docs.status_code == 200 and "/swagger-assets/" in docs.text
     assert "cdn.jsdelivr" not in docs.text and "unpkg.com" not in docs.text

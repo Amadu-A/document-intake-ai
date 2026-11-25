@@ -6,6 +6,7 @@ import io
 import json
 import re
 import zipfile
+from contextlib import closing
 from copy import deepcopy
 from decimal import Decimal
 from pathlib import Path
@@ -13,6 +14,7 @@ from urllib.parse import unquote
 
 import pymupdf
 import pytest
+from openpyxl import load_workbook
 
 from app.domain.extractions import DetailedFacts
 from app.domain.schema import OneC
@@ -228,4 +230,20 @@ async def check_exports(client, identifier, expected, original):
     with zipfile.ZipFile(io.BytesIO(zipped.content)) as archive:
         assert archive.namelist() == [expected["expected_archive_entry"]]
         assert archive.read(archive.namelist()[0]) == response.content
+    registry = await client.get(url + "/registry", headers=KEY)
+    assert registry.status_code == 200
+    rows = registry.json()["items"]
+    assert len(rows) == 1 and rows[0]["document_id"] == legacy[0]["document_id"]
+    r = legacy[0]["requisites"]
+    day = r["document_date"].split("-")
+    assert rows[0]["document_number"] == f"{r['document_number']} от {'.'.join(reversed(day))}"
+    assert rows[0]["document_name"] == legacy[0]["classification"]["document_kind"]
+    assert rows[0]["sender"] == r["sender"]["name"]
+    assert rows[0]["recipient"] == r["recipient"]["name"]
+    assert rows[0]["date"] is rows[0]["receipt_city"] is rows[0]["notes"] is None
+    xlsx = await client.get(url + "/registry.xlsx", headers=KEY)
+    assert xlsx.status_code == 200
+    with closing(load_workbook(io.BytesIO(xlsx.content))) as workbook:
+        assert workbook.active.max_row == 2 and workbook.active.max_column == 14
+        assert workbook.active["H2"].value == rows[0]["document_number"]
     return detailed

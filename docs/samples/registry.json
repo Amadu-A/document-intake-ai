@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "job_id": "11111111-1111-4111-8111-111111111111",
+  "items": [
+    {
+      "document_id": "synthetic-document",
+      "number": 1,
+      "date": null,
+      "delivery_method": null,
+      "receipt_city": null,
+      "recipient": "ООО «Учебный покупатель»",
+      "document_name": "Счёт-фактура",
+      "sender": "ООО «Учебный продавец»",
+      "document_number": "0002647329 от 27.11.2025",
+      "opening_date": null,
+      "scanning_date": null,
+      "registration_date": null,
+      "responsible": null,
+      "notes": null,
+      "document_link": null
+    }
+  ]
+}

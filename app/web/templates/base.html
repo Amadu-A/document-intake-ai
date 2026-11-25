@@ -9,7 +9,7 @@
   <title>Document Intake AI</title>
   {% include 'components/favicons.html' %}
   <link rel="stylesheet" href="/static/css/style.css">
-  <script src="/static/js/app.js" type="module"></script>
+  {% block scripts %}<script src="/static/js/app.js" type="module"></script>{% endblock %}
 </head>
 <body class="page">
   <header class="header">
@@ -17,14 +17,14 @@
       <span class="header__logo" aria-hidden="true">▣</span>
       <span>Document Intake AI<small class="header__subtitle">Распознавание и подготовка документов для 1С ДО</small></span>
     </a>
-    <nav class="header__actions" aria-label="Действия с пакетом">
+    {% block header_actions %}<nav class="header__actions" aria-label="Действия с пакетом">
       <span class="badge" data-ttl>Хранение: 24 часа</span>
       <button class="button" type="button" data-history-open>Мои задания</button>
       <button class="button" type="button" data-prompts-open>⌘ Промпты</button>
-    </nav>
+    </nav>{% endblock %}
   </header>
   <main class="page__content">{% block content %}{% endblock %}</main>
-  <footer class="page__footer"><span>Docling + shared-VLM · Все приложения сохраняются в комплекте</span><a href="/docs" target="_blank" rel="noopener">REST API / документация</a></footer>
+  <footer class="page__footer"><span>Docling + shared-VLM · Все приложения сохраняются в комплекте</span><a href="/integration/1c" target="_blank" rel="noopener">Инструкция программисту 1С</a><a href="/docs" target="_blank" rel="noopener">REST API / документация</a></footer>
   {% include 'components/prompts.html' %}
   {% include 'components/history.html' %}
 </body>

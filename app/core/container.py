@@ -11,11 +11,13 @@ from app.application.boundaries import ManageBoundaries
 from app.application.exports import Exports
 from app.application.intake import Intake
 from app.application.prompts import Prompts
+from app.application.registry import Registry
 from app.core.settings import Settings
 from app.infrastructure.database import Database
 from app.infrastructure.docling import DoclingOCR
 from app.infrastructure.health import Health
 from app.infrastructure.messaging import Rabbit
+from app.infrastructure.registry_xlsx import RegistryXlsx
 from app.infrastructure.security import Capabilities
 from app.infrastructure.storage import FileStorage
 from app.infrastructure.vision import SharedVision
@@ -43,6 +45,7 @@ class Container:
         self.intake = Intake(self.database, self.storage, self.prompts)
         self.boundaries = ManageBoundaries(self.database, self.intake, self.prompts)
         self.exports = Exports(self.intake, self.capabilities, settings.document_max_pages)
+        self.registry = Registry(self.intake, RegistryXlsx())
         self.vision = SharedVision(settings, self.http)
         self.ocr = DoclingOCR(settings, self.http)
         self.rabbit = Rabbit(settings)

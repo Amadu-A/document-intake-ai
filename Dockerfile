@@ -15,6 +15,7 @@ ENV PATH="/opt/app/.venv/bin:$PATH"
 COPY app ./app
 COPY prompts ./prompts
 COPY migrations ./migrations
+COPY docs/API_1C_document_intake.md ./docs/API_1C_document_intake.md
 COPY alembic.ini .env.example ./
 RUN mkdir -p /data && chown 10001:10001 /data && chmod 0700 /data
 USER 10001:10001

@@ -14,8 +14,10 @@ from app.application.boundaries import ManageBoundaries
 from app.application.exports import Exports
 from app.application.intake import Intake
 from app.application.prompts import Prompts
+from app.application.registry import Registry
 from app.core.settings import Settings
 from app.infrastructure.database import Base, Database
+from app.infrastructure.registry_xlsx import RegistryXlsx
 from app.infrastructure.security import Capabilities
 from app.infrastructure.storage import FileStorage
 from app.main import create_app
@@ -95,6 +97,7 @@ async def container(settings):
         health=SyntheticHealth(),
     )
     root.analysis = Analyze(database, storage, vision, ocr, settings)
+    root.registry = Registry(intake, RegistryXlsx())
     yield root
     await engine.dispose()
 

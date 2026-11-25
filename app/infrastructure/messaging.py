@@ -1,7 +1,13 @@
 # app/infrastructure/messaging.py
 """Выделенная durable AMQP-очередь с publisher confirms и ограниченной глубиной."""
 
+from contextlib import asynccontextmanager
+
 import aio_pika
+
+
+class NoConsumer(RuntimeError):
+    """Живой брокер не видит подписку; readiness может проверить работающий lease проекта."""
 
 
 class Rabbit:
@@ -55,7 +61,25 @@ class Rabbit:
             await self.connect()
         queue = await self.channel.declare_queue(self.settings.rabbitmq_queue, passive=True)
         if queue.declaration_result.consumer_count < 1:
-            raise RuntimeError("Очередь приложения не имеет consumer")
+            raise NoConsumer("Очередь приложения не имеет consumer")
+
+    @asynccontextmanager
+    async def delivery(self):
+        """Выдаёт одну доставку с остановленной подпиской; publisher channel независим.
+
+        Prefetch=1 не допускает второго сообщения до ACK. CancelOk получен до
+        передачи сообщения вызывающему коду. Закрытие канала возвращает брокеру
+        неопределённые доставки; delivery tag никогда не переиспользуется.
+        """
+        channel = await self.connection.channel(publisher_confirms=False)
+        try:
+            await channel.set_qos(prefetch_count=1)
+            queue = await channel.declare_queue(self.settings.rabbitmq_queue, passive=True)
+            async with queue.iterator() as iterator:
+                message = await anext(iterator)
+            yield message
+        finally:
+            await channel.close()
 
     async def close(self) -> None:
         """Закрывает только собственное соединение, сохраняя durable очередь."""

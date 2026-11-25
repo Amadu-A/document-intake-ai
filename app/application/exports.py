@@ -281,6 +281,8 @@ class Exports:
                 "pages": f"/api/v1/jobs/{job.id}/pages",
                 "segmentation": f"/api/v1/jobs/{job.id}/segmentation",
                 "archive": self.archive_path(job.id),
+                "registry": f"/api/v1/jobs/{job.id}/registry",
+                "registry_xlsx": f"/api/v1/jobs/{job.id}/registry.xlsx",
             },
         }
 

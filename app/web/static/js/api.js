@@ -32,15 +32,30 @@ export async function request(path, options = {}) {
 
 export async function api(path, options = {}) {
   /** Посылает JSON-запрос текущей сессии; приватные ответы не сохраняет в console/log. */
+  const response = await checkedRequest(path, options);
+  return response.json();
+}
+
+async function checkedRequest(path, options) {
+  /** Проверяет общий envelope для JSON/файлов, не сохраняя payload в console. */
   const response = await request(path, options);
-  const data = await response.json();
   if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
     const error = new Error(data.error?.message || "Запрос не выполнен");
     error.code = data.error?.code;
     error.status = response.status;
     throw error;
   }
-  return data;
+  return response;
+}
+
+export async function apiFile(path, options = {}) {
+  /** Читает бинарный ответ с теми же cookie, отменой, 429 и обработкой ошибок. */
+  const response = await checkedRequest(path, options);
+  let name = 'Реестр документов.xlsx';
+  const encoded = response.headers.get('Content-Disposition')?.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  try { if (encoded) name = decodeURIComponent(encoded); } catch { /* Сохраняем безопасное имя. */ }
+  return { blob: await response.blob(), file_name: name };
 }
 
 export function downloadJSON(value) {

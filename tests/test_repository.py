@@ -162,7 +162,7 @@ async def test_deadline_is_separate_from_retention(container):
     await container.database.recover()
     failed = await container.database.get(job.id)
     assert failed.status == "failed"
-    assert failed.error["code"] == "job_timeout"
+    assert failed.error["code"] == "queue_timeout"
     assert failed.expires_at == failed.completed_at + timedelta(
         seconds=container.settings.retention_seconds
     )

@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     worker_max_attempts: int = Field(3, ge=1, le=5)
     queue_max_depth: int = Field(100, ge=1, le=1000)
     job_timeout_seconds: int = Field(14400, ge=30, le=86400)
-    queue_timeout_seconds: int = Field(1800, ge=30, le=14400)
+    queue_timeout_seconds: int = Field(14400, ge=30, le=14400)
     preview_timeout_seconds: int = Field(3600, ge=30, le=14400)
     confirmation_timeout_seconds: int = Field(86400, ge=3600, le=86400)
     retention_seconds: int = Field(86400, ge=3600, le=86400)

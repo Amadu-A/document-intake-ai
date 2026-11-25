@@ -10,6 +10,7 @@ import struct
 import subprocess
 import time
 from pathlib import Path
+from urllib.parse import quote
 from uuid import uuid4
 
 import httpx
@@ -26,13 +27,28 @@ from pathlib import Path
 from app.core.container import Container
 from app.core.settings import Settings
 from app.worker import run
+import app.worker as worker_module
+
+async def pause_at(point, identifier):
+    """Останавливает только тест в точной границе; после crash повторно не задерживает."""
+    choice=Path('/test-gates/pause-point')
+    marker=Path('/test-gates',point+'-'+identifier)
+    if choice.exists() and choice.read_text()==point and not marker.exists():
+        marker.touch()
+        while not Path('/test-gates','continue-'+point+'-'+identifier).exists():
+            await asyncio.sleep(.1)
 
 class ControlledAnalysis:
     """Держит один slot до разрешения теста, не обращаясь к OCR/VLM."""
     def __init__(self, database): self.database = database
     async def execute(self, job):
+        resumed=job.manifest.get('delivery_checkpoint',False)
+        if not resumed:
+            await self.database.checkpoint(job.id,job.fence,'normalized',
+                {'source_counts':{},'delivery_checkpoint':True})
         await self.database.checkpoint(
-            job.id, job.fence, 'stage', {'stage':'delivery_test','progress':10})
+            job.id, job.fence, 'stage',
+            {'stage':'delivery_test_resume' if resumed else 'delivery_test','progress':10})
         while not Path('/test-gates',job.id).exists(): await asyncio.sleep(.1)
         await self.database.finish(
             job.id, job.fence, {'schema_version':'1.0','batch_id':job.id,'files':[]},
@@ -41,6 +57,21 @@ class ControlledAnalysis:
 
 async def main():
     container=Container(Settings());container.analysis=ControlledAnalysis(container.database)
+    original_claim=container.database.claim
+    async def claim(identifier):
+        """Оставляет настоящий commit claim и добавляет наблюдаемую границу падения."""
+        await pause_at('before_claim',identifier)
+        value=await original_claim(identifier)
+        return value
+    container.database.claim=claim
+    original_settle=worker_module._settle
+    async def settle(message,operation,job=None):
+        """Не подменяет AMQP ACK: паузы находятся непосредственно до и после него."""
+        if operation=='ack' and job: await pause_at('before_ack',job.id)
+        result=await original_settle(message,operation,job)
+        if operation=='ack' and job: await pause_at('after_ack',job.id)
+        return result
+    worker_module._settle=settle
     try: await run(container)
     finally: await container.close()
 asyncio.run(main())
@@ -67,16 +98,26 @@ def free_port() -> int:
 class DeliveryLab:
     """Все изменяемые Docker-ресурсы имеют уникальный префикс и принадлежат этому тесту."""
 
-    def __init__(self, root: Path, app_image: str = "document-intake-ai:local"):
+    def __init__(
+        self,
+        root: Path,
+        app_image: str = "document-intake-ai:local",
+        consumer_timeout_ms: int | None = None,
+    ):
         """Создаёт приватные тестовые secrets; настоящие .env не читаются."""
         self.root = root
         self.app_image = app_image
+        self.consumer_timeout_ms = consumer_timeout_ms
         self.prefix = "document-intake-delivery-" + uuid4().hex[:10]
         self.containers = []
         self.workers = []
         self.network_created = False
         self.password = secrets.token_hex(24)
         self.root.mkdir(parents=True, exist_ok=True)
+        if consumer_timeout_ms is not None:
+            (root / "timeout.conf").write_text(
+                f"consumer_timeout = {consumer_timeout_ms}\n", "utf-8"
+            )
         self.env = root / "test.env"
         values = {
             "POSTGRES_PASSWORD": self.password,
@@ -132,6 +173,12 @@ class DeliveryLab:
             ]
             if suffix == "mq":
                 args += ["-p", f"127.0.0.1:{free_port()}:15672"]
+                if self.consumer_timeout_ms is not None:
+                    args += [
+                        "--mount",
+                        f"type=bind,source={self.root / 'timeout.conf'},"
+                        "target=/etc/rabbitmq/conf.d/99-test-timeout.conf,readonly",
+                    ]
             docker(*args, image)
             self.containers.append(name)
         self.pg_port = int(docker("port", self.prefix + "-pg", "5432/tcp").rsplit(":", 1)[1])
@@ -157,9 +204,12 @@ class DeliveryLab:
             time.sleep(0.5)
         raise RuntimeError("Изолированные PG/RabbitMQ не готовы")
 
-    def worker(self) -> str:
+    def worker(self, boundary: str | None = None) -> str:
         """Запускает текущий production worker, подменяя только длительную бизнес-операцию."""
         name = self.prefix + "-worker-" + str(len(self.workers) + 1)
+        if boundary:
+            assert boundary in {"before_claim", "before_ack", "after_ack"}
+            (self.root / "pause-point").write_text(boundary, "utf-8")
         project = Path(__file__).resolve().parents[1]
         docker(
             "run",
@@ -254,6 +304,28 @@ class DeliveryLab:
             )
             response.raise_for_status()
             return response.json()
+
+    async def close_delivery_channel(self) -> None:
+        """Закрывает worker connection и его unacked канал только собственного брокера."""
+        async with httpx.AsyncClient(
+            trust_env=False, timeout=5, auth=("document_intake", self.password)
+        ) as client:
+            async with asyncio.timeout(25):
+                while True:
+                    response = await client.get(f"http://127.0.0.1:{self.http_port}/api/channels")
+                    response.raise_for_status()
+                    channels = [
+                        c for c in response.json() if c.get("messages_unacknowledged", 0) > 0
+                    ]
+                    if channels:
+                        assert len(channels) == 1
+                        name = quote(channels[0]["connection_details"]["name"], safe="")
+                        closed = await client.delete(
+                            f"http://127.0.0.1:{self.http_port}/api/connections/{name}"
+                        )
+                        closed.raise_for_status()
+                        return
+                    await asyncio.sleep(0.2)
 
     async def wait_status(self, identifier: str, status: str, seconds: int = 40) -> Job:
         """Проверяет durable состояние, не принимая наличие сообщения за выполнение задания."""
