@@ -419,6 +419,25 @@ class Database(BoundaryTransactions):
             )
 
     async def checkpoint(self, job_id: str, fence: int, kind: str, data: dict) -> None:
+        """Завершает начатую fenced-запись до отмены, не оставляя SQL-транзакцию в фоне."""
+        writing = asyncio.create_task(self._checkpoint(job_id, fence, kind, data))
+        cancelled = None
+        while True:
+            try:
+                await asyncio.shield(writing)
+                break
+            except asyncio.CancelledError as error:
+                if writing.cancelled():
+                    raise
+                cancelled = error
+            except Exception:
+                if cancelled is not None:
+                    raise cancelled from None
+                raise
+        if cancelled is not None:
+            raise cancelled
+
+    async def _checkpoint(self, job_id: str, fence: int, kind: str, data: dict) -> None:
         """Сохраняет этап/рендеры/событие; устаревшему worker запись запрещена."""
         async with self._transaction() as session:
             row, job = await self._locked(session, job_id)

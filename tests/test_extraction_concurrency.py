@@ -19,11 +19,13 @@ from app.application.analysis import Analyze, reusable_document
 from app.domain.boundaries import FixedGroup
 from app.domain.errors import LeaseLost
 from app.domain.jobs import utcnow
-from app.infrastructure.database import JobRow
 from app.infrastructure.vision import SharedVision
 from app.worker import process
 from tests.test_boundary_api import KEY, confirm, create, segmentation
 from tests.test_extractions_v2 import extracted, selected
+
+# Ожидание реальной сборки PDF в subprocess до первого VLM-вызова, включая три пакета.
+PREPARATION_TIMEOUT_SECONDS = 30
 
 
 class ContextVLM:
@@ -218,8 +220,8 @@ async def test_three_packets_share_document_limit_and_keep_facts_separate(client
         identifiers = [await approved(client, container, 3) for _ in range(3)]
         tasks = [asyncio.create_task(process(container, i)) for i in identifiers]
         try:
-            await asyncio.wait_for(vlm.entered.wait(), 5)
-            await asyncio.wait_for(vlm.three_active.wait(), 5)
+            await asyncio.wait_for(vlm.entered.wait(), PREPARATION_TIMEOUT_SECONDS)
+            await asyncio.wait_for(vlm.three_active.wait(), PREPARATION_TIMEOUT_SECONDS)
             await asyncio.sleep(0.05)
             assert vlm.active == 3
             vlm.release.set()
@@ -271,7 +273,7 @@ async def test_cancel_drains_documents_and_http_requests(client, container, caus
         try:
             # До первого VLM вызова штатно собираются пять PDF в отдельных процессах.
             # Это ожидание подготовки на CI, а не допустимое время остановки ниже.
-            await asyncio.wait_for(vlm.entered.wait(), 30)
+            await asyncio.wait_for(vlm.entered.wait(), PREPARATION_TIMEOUT_SECONDS)
             if cause == "cancel":
                 await container.intake.cancel(identifier, "integration:onec")
             else:
@@ -324,7 +326,7 @@ async def test_second_cancel_does_not_interrupt_child_cleanup(client, container)
         identifier = await approved(client, container, 3)
         driver = asyncio.create_task(process(container, identifier))
         try:
-            await asyncio.wait_for(vlm.three_active.wait(), 5)
+            await asyncio.wait_for(vlm.three_active.wait(), PREPARATION_TIMEOUT_SECONDS)
             await container.intake.cancel(identifier, "integration:onec")
             await asyncio.wait_for(cleaning.wait(), 5)
             driver.cancel()
@@ -340,7 +342,10 @@ async def test_second_cancel_does_not_interrupt_child_cleanup(client, container)
             await asyncio.gather(driver, return_exceptions=True)
 
 
-async def test_restart_reuses_checkpoints_ids_and_monotonic_unique_progress(client, container):
+@pytest.mark.parametrize("writer_busy", [False, True], ids=["idle", "concurrent-checkpoint"])
+async def test_restart_reuses_checkpoints_ids_and_monotonic_unique_progress(
+    client, container, writer_busy
+):
     """Прерывает executor после первого checkpoint, меняет fence и восстанавливает тот же пакет."""
     vlm = ContextVLM()
     paused, release = asyncio.Event(), asyncio.Event()
@@ -358,7 +363,7 @@ async def test_restart_reuses_checkpoints_ids_and_monotonic_unique_progress(clie
         identifier = await approved(client, container, 3)
         task = asyncio.create_task(process(container, identifier))
         try:
-            await asyncio.wait_for(paused.wait(), 5)
+            await asyncio.wait_for(paused.wait(), PREPARATION_TIMEOUT_SECONDS)
             async with asyncio.timeout(5):
                 while True:
                     saved = await container.database.get(identifier)
@@ -371,9 +376,37 @@ async def test_restart_reuses_checkpoints_ids_and_monotonic_unique_progress(clie
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-        async with container.database.sessions.begin() as session:
-            row = await session.get(JobRow, identifier)
-            row.lease_until = utcnow() - timedelta(seconds=1)
+
+        async def expire_lease():
+            """Меняет только тестовый lease в общей очереди записей repository."""
+            async with container.database._transaction() as session:
+                row, _ = await container.database._locked(session, identifier)
+                row.lease_until = utcnow() - timedelta(seconds=1)
+
+        if writer_busy:
+            expiring = None
+            try:
+                async with container.database._transaction() as session:
+                    row, snapshot = await container.database._locked(session, identifier)
+                    # Незавершённый checkpoint удерживает настоящий SQLite write lock.
+                    container.database._write(
+                        session,
+                        row,
+                        snapshot,
+                        "stage",
+                        {"stage": snapshot.stage, "progress": snapshot.progress},
+                    )
+                    await session.flush()
+                    expiring = asyncio.create_task(expire_lease())
+                    done_tasks, _ = await asyncio.wait({expiring}, timeout=0.05)
+                    assert not done_tasks
+                await asyncio.wait_for(expiring, 5)
+            finally:
+                if expiring is not None:
+                    expiring.cancel()
+                    await asyncio.gather(expiring, return_exceptions=True)
+        else:
+            await expire_lease()
         await container.database.recover()
         release.set()
         await process(container, identifier)
