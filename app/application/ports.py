@@ -26,6 +26,7 @@ class AnalysisSettings(Protocol):
     """Только параметры VLM-оркестрации, необходимые application-слою."""
 
     pair_concurrency: int
+    document_extraction_concurrency: int
     pair_max_attempts: int
     model_attempts: int
     vlm_window_pages: int
@@ -101,6 +102,12 @@ class JobRepository(Protocol):
 
     async def checkpoint(self, job_id: str, fence: int, kind: str, data: dict) -> None:
         """Сохраняет событие и прогресс при действующем fencing-токене."""
+        ...
+
+    async def begin_documents(
+        self, job_id: str, fence: int, documents: dict, retained: list[str]
+    ) -> None:
+        """Фиксирует PDF/ID текущего плана и восстанавливает счётчик валидных checkpoints."""
         ...
 
     async def finish(

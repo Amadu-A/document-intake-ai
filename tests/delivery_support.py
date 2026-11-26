@@ -135,6 +135,7 @@ class DeliveryLab:
             "DOWNLOAD_SECRET": secrets.token_hex(32),
             "API_KEYS": json.dumps({"test": secrets.token_hex(24)}),
             "WORKER_LEASE_SECONDS": "15",
+            "WORKER_CONCURRENCY": "1",
             "DATA_DIR": "/test-gates/data",
             "PYTHONPATH": "/opt/app",
         }

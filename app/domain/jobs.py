@@ -91,6 +91,7 @@ class Job(StrictModel):
     processing_deadline_at: datetime | None = None
     work_progress: dict[Literal["ocr", "extraction"], WorkProgress] = Field(default_factory=dict)
     work_stage: str | None = None
+    extraction_active: int = Field(0, ge=0)
     document_processing: dict[str, DocumentProcessing] = Field(default_factory=dict)
     document_results: dict[str, DocumentCheckpoint] = Field(default_factory=dict)
 

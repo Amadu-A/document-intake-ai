@@ -6,7 +6,8 @@ import hashlib
 import json
 import re
 from copy import deepcopy
-from uuid import uuid4
+from dataclasses import dataclass
+from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import ValidationError
 
@@ -25,7 +26,12 @@ from app.core.observability import report_failure, timed
 from app.domain.boundaries import AttachmentPages, FixedGroup
 from app.domain.document_kinds import catalog_json
 from app.domain.document_names import document_filename
-from app.domain.document_processing import MAX_VLM_PAGES, DocumentCheckpoint, DocumentClassification
+from app.domain.document_processing import (
+    MAX_VLM_PAGES,
+    DocumentCheckpoint,
+    DocumentClassification,
+    DocumentProcessing,
+)
 from app.domain.errors import IntakeError, LeaseLost
 from app.domain.extraction import ExtractionDraft, PrimaryDateReading
 from app.domain.extractions import DetailedExtraction, DetailedFacts
@@ -136,6 +142,50 @@ def validate_extraction(facts: Extracted, group: FixedGroup, organization: str |
         return
 
 
+@dataclass(frozen=True, slots=True)
+class DocumentOutcome:
+    """Независимый результат одного задания пула; сборщик читает его после завершения задач."""
+
+    document_id: str
+    artifact: dict
+    group: FixedGroup
+    facts: DetailedFacts | Extracted
+    processing: DocumentProcessing
+    fingerprint: str
+
+
+def document_fingerprint(job: Job, group: FixedGroup) -> str:
+    """Сохраняет существующий fingerprint immutable промпта/упорядоченных физических страниц."""
+    return hashlib.sha256(
+        json.dumps(
+            [
+                "document-processing-v2",
+                job.prompts["extraction"],
+                [p.model_dump() for p in group.pages],
+            ],
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+
+
+def reusable_document(job: Job, group: FixedGroup) -> DocumentCheckpoint | None:
+    """Сверяет fingerprint, индекс и точные страницы checkpoint перед повторным использованием."""
+    cached = job.document_results.get(str(group.document_index))
+    return (
+        cached
+        if cached
+        and (
+            cached.fingerprint == document_fingerprint(job, group)
+            and cached.group.document_index == group.document_index
+            and cached.processing.segment_index == group.document_index
+            and cached.group.pages == group.pages
+            and cached.processing.status != "processing"
+        )
+        else None
+    )
+
+
 class Analyze:
     """Оркестрирует OCR, два VLM-прохода, PDF и атомарную публикацию результата."""
 
@@ -152,6 +202,7 @@ class Analyze:
         self.ocr, self.settings = ocr, settings
         self.pairwise = Pairwise(repository, vision, settings)
         self.documents = ProcessDocument(settings, self._validated)
+        self.document_slots = asyncio.Semaphore(settings.document_extraction_concurrency)
 
     async def _validated(
         self,
@@ -604,6 +655,178 @@ class Analyze:
         )
         return result.facts()
 
+    async def _extract_document(
+        self,
+        job: Job,
+        group: FixedGroup,
+        selected: list[dict],
+        document_id: str,
+        artifact: dict,
+        plan_warnings: list[str],
+        excluded: bool,
+        emit: Emit,
+    ) -> DocumentOutcome:
+        """Возвращает собственные факты/группу/артефакт, не меняя общий manifest или файлы."""
+        group = group.model_copy(deep=True)
+        selected, artifact = deepcopy(selected), deepcopy(artifact)
+        index = group.document_index
+
+        async def document_emit(kind: str, data: dict, identifier=document_id) -> None:
+            """Привязывает диагностику к одному PDF без выдачи реквизитов в статусе."""
+            if kind == "document_processing":
+                await emit(kind, {"document_id": identifier, "processing": data})
+            else:
+                await emit(kind, data)
+
+        fingerprint = document_fingerprint(job, group)
+        cached = reusable_document(job, group)
+        if cached:
+            facts, processing = (
+                cached.facts.model_copy(deep=True),
+                cached.processing.model_copy(deep=True),
+            )
+            group = cached.group.model_copy(deep=True)
+        else:
+            facts, processing = await self.documents.run(
+                job, group, selected, self._extract, document_emit
+            )
+        if not group.main_pages:
+            group.main_pages = list(group.pages)
+        artifact["group"] = group.model_dump(mode="json")
+        facts.one_c = (
+            project_one_c(facts, job.organization_hint)
+            if processing.status == "recognized"
+            else OneC(organization=canonical_organization(job.organization_hint))
+        )
+        facts.recognition.ocr_engine = "docling"
+        facts.warnings.extend(plan_warnings)
+        if excluded:
+            facts.warnings.append("В пакете есть явно исключённые страницы; оригиналы сохранены")
+        if facts.recognition.low_confidence_fields:
+            facts.warnings.append("Некоторые реквизиты распознаны с низкой уверенностью")
+        confidence = facts.classification.confidence
+        if confidence is not None and confidence < 0.7:
+            facts.warnings.append("Низкая уверенность VLM в классификации")
+        if any(p.get("ocr_truncated") for p in selected):
+            facts.warnings.append("OCR-контекст части страниц ограничен; VLM получила изображения")
+        if group.confidence is not None and group.confidence < 0.7:
+            facts.warnings.append("Низкая уверенность VLM в группировке страниц")
+        primary = group.pages[0].file_id
+        if any(p.file_id != primary for p in group.pages):
+            facts.warnings.append("PDF-комплект объединяет несколько исходных файлов; см. manifest")
+        for attachment in group.attachments:
+            numbers = [p.page_number for p in attachment.pages]
+            if numbers and (
+                any(p.file_id != primary for p in attachment.pages)
+                or numbers != list(range(min(numbers), max(numbers) + 1))
+            ):
+                facts.warnings.append(
+                    "Сложный состав приложения: физические страницы указаны в manifest"
+                )
+        artifact["file_name"] = document_filename(index, facts)
+        facts.warnings = list(dict.fromkeys(facts.warnings))
+        return DocumentOutcome(document_id, artifact, group, facts, processing, fingerprint)
+
+    async def _extract_documents(
+        self,
+        job: Job,
+        groups: list[FixedGroup],
+        artifacts: list[tuple[str, dict]],
+        lookup: dict,
+        plan_warnings: list[str],
+        excluded: bool,
+        emit: Emit,
+    ) -> list[DocumentOutcome]:
+        """Фиксированный пул возвращает независимые списки; только короткая публикация общая."""
+        pending = iter(enumerate(groups, 1))
+        completed = {g.document_index for g in groups if reusable_document(job, g)}
+        active: set[int] = set()
+        publication = asyncio.Lock()
+
+        async def progress() -> None:
+            """Пишет уникальный монотонный счётчик и фактическую активность под одним lock."""
+            await emit(
+                "extraction_progress",
+                {
+                    "completed": len(completed),
+                    "total": len(groups),
+                    "active": len(active),
+                },
+            )
+            await emit(
+                "stage",
+                {
+                    "stage": "extraction_vlm",
+                    "progress": 50 + 40 * len(completed) // len(groups),
+                },
+            )
+
+        async def work() -> list[DocumentOutcome]:
+            """Берёт индекс без await в next; сохраняет checkpoint до следующего блока."""
+            results = []
+            for index, group in pending:
+                async with self.document_slots:
+                    async with publication:
+                        if index not in completed:
+                            active.add(index)
+                        await progress()
+                    document_id, artifact = artifacts[index - 1]
+                    selected = [lookup[(p.file_id, p.page_number)] for p in group.pages]
+                    outcome = await self._extract_document(
+                        job,
+                        group,
+                        selected,
+                        document_id,
+                        artifact,
+                        plan_warnings,
+                        excluded,
+                        emit,
+                    )
+                    async with publication:
+                        await emit(
+                            "document_completed",
+                            {
+                                "document_id": outcome.document_id,
+                                "artifact": outcome.artifact,
+                                "checkpoint": DocumentCheckpoint(
+                                    fingerprint=outcome.fingerprint,
+                                    facts=outcome.facts,
+                                    group=outcome.group,
+                                    processing=outcome.processing,
+                                    extraction_schema_version="2.0",
+                                ).model_dump(mode="json"),
+                            },
+                        )
+                        completed.add(index)
+                        active.discard(index)
+                        await progress()
+                    results.append(outcome)
+            return results
+
+        tasks = [
+            asyncio.create_task(work())
+            for _ in range(min(len(groups), self.settings.document_extraction_concurrency))
+        ]
+        running = asyncio.gather(*tasks)
+        try:
+            parts = await asyncio.shield(running)
+            return sorted((r for part in parts for r in part), key=lambda r: r.group.document_index)
+        finally:
+            for task in tasks:
+                if not task.done() and not task.cancelling():
+                    task.cancel()
+            # Повторная отмена watchdog/shutdown не прерывает cleanup HTTP/checkpoint корутин.
+            closing = asyncio.gather(running, *tasks, return_exceptions=True)
+            cancelled = False
+            while True:
+                try:
+                    await asyncio.shield(closing)
+                    break
+                except asyncio.CancelledError:
+                    cancelled = True
+            if cancelled:
+                raise asyncio.CancelledError
+
     async def _prepared(self, job: Job, emit: Emit) -> Job:
         """Продолжает с durable preview checkpoint и не конвертирует готовый пакет повторно."""
         if job.preview_complete:
@@ -695,9 +918,24 @@ class Analyze:
                 p.model_dump(mode="json") for p in job.approved_plan.excluded_pages
             ]
             # Проверка фактического размера PDF делается до OCR/extraction ручного режима.
+            saved_ids = {
+                item["group"]["document_index"]: (identifier, item["group"].get("pages"))
+                for identifier, item in job.manifest.get("documents", {}).items()
+                if item.get("group", {}).get("document_index") is not None
+            }
             artifacts = []
             for group in groups:
-                document_id = str(uuid4())
+                saved = saved_ids.get(group.document_index)
+                document_id = (
+                    saved[0]
+                    if saved and saved[1] == [p.model_dump() for p in group.pages]
+                    else str(
+                        uuid5(
+                            NAMESPACE_URL,
+                            f"{job.id}:{job.approved_revision}:{group.document_index}",
+                        )
+                    )
+                )
                 artifact = await self.storage.pdf(job, document_id, group.pages)
                 manifest["documents"][document_id] = {
                     **artifact,
@@ -732,93 +970,28 @@ class Analyze:
                 p.get("ocr_truncated") for p in recognized
             )
             lookup = {(p["file_id"], p["page_number"]): p for p in recognized}
-            await emit("extraction_progress", {"completed": 0, "total": len(groups)})
-            for index, group in enumerate(groups, 1):
-                await emit(
-                    "stage",
-                    {
-                        "stage": "extraction_vlm",
-                        "progress": 50 + int(40 * (index - 1) / len(groups)),
-                    },
-                )
-                selected = [lookup[(p.file_id, p.page_number)] for p in group.pages]
-                document_id = artifacts[index - 1][0]
-
-                async def document_emit(kind: str, data: dict, identifier=document_id) -> None:
-                    """Привязывает диагностику к одному PDF без выдачи реквизитов в статусе."""
-                    if kind == "document_processing":
-                        await emit(kind, {"document_id": identifier, "processing": data})
-                    else:
-                        await emit(kind, data)
-
-                fingerprint = hashlib.sha256(
-                    json.dumps(
-                        [
-                            "document-processing-v2",
-                            job.prompts["extraction"],
-                            [p.model_dump() for p in group.pages],
-                        ],
-                        ensure_ascii=False,
-                        sort_keys=True,
-                    ).encode()
-                ).hexdigest()
-                cached = job.document_results.get(str(index))
-                if cached and cached.fingerprint == fingerprint:
-                    facts, processing = (
-                        cached.facts.model_copy(deep=True),
-                        cached.processing.model_copy(deep=True),
-                    )
-                    group = cached.group.model_copy(deep=True)
-                    groups[index - 1] = group
-                else:
-                    facts, processing = await self.documents.run(
-                        job, group, selected, self._extract, document_emit
-                    )
-                if not group.main_pages:
-                    group.main_pages = list(group.pages)
-                manifest["documents"][artifacts[index - 1][0]]["group"] = group.model_dump(
-                    mode="json"
-                )
-                facts.one_c = (
-                    project_one_c(facts, job.organization_hint)
-                    if processing.status == "recognized"
-                    else OneC(organization=canonical_organization(job.organization_hint))
-                )
-                facts.recognition.ocr_engine = "docling"
-                facts.warnings.extend(plan_warnings)
-                if manifest["excluded_pages"]:
-                    facts.warnings.append(
-                        "В пакете есть явно исключённые страницы; оригиналы сохранены"
-                    )
-                if facts.recognition.low_confidence_fields:
-                    facts.warnings.append("Некоторые реквизиты распознаны с низкой уверенностью")
-                confidence = facts.classification.confidence
-                if confidence is not None and confidence < 0.7:
-                    facts.warnings.append("Низкая уверенность VLM в классификации")
-                if any(p.get("ocr_truncated") for p in selected):
-                    facts.warnings.append(
-                        "OCR-контекст части страниц ограничен; VLM получила изображения"
-                    )
-                if group.confidence is not None and group.confidence < 0.7:
-                    facts.warnings.append("Низкая уверенность VLM в группировке страниц")
+            retained = [str(g.document_index) for g in groups if reusable_document(job, g)]
+            await self.repository.begin_documents(
+                job.id, job.fence, manifest["documents"], retained
+            )
+            outcomes = await self._extract_documents(
+                job,
+                groups,
+                artifacts,
+                lookup,
+                plan_warnings,
+                bool(manifest["excluded_pages"]),
+                emit,
+            )
+            groups = []
+            names: set[str] = set()
+            for outcome in outcomes:
+                group, facts, artifact = outcome.group, outcome.facts, outcome.artifact
+                index, document_id = group.document_index, outcome.document_id
+                artifact["file_name"] = document_filename(index, facts, names)
+                manifest["documents"][document_id] = artifact
+                groups.append(group)
                 primary = group.pages[0].file_id
-                if any(p.file_id != primary for p in group.pages):
-                    facts.warnings.append(
-                        "PDF-комплект объединяет несколько исходных файлов; см. manifest"
-                    )
-                for attachment in group.attachments:
-                    numbers = [p.page_number for p in attachment.pages]
-                    if numbers and (
-                        any(p.file_id != primary for p in attachment.pages)
-                        or numbers != list(range(min(numbers), max(numbers) + 1))
-                    ):
-                        facts.warnings.append(
-                            "Сложный состав приложения: физические страницы указаны в manifest"
-                        )
-                document_id, artifact = artifacts[index - 1]
-                artifact["file_name"] = document_filename(index, facts)
-                manifest["documents"][document_id]["file_name"] = artifact["file_name"]
-                facts.warnings = list(dict.fromkeys(facts.warnings))
                 files[primary].documents.append(
                     Document(
                         **(
@@ -834,21 +1007,6 @@ class Analyze:
                     )
                 )
                 has_warnings |= bool(facts.warnings)
-                await emit(
-                    "document_completed",
-                    {
-                        "document_id": document_id,
-                        "artifact": manifest["documents"][document_id],
-                        "checkpoint": DocumentCheckpoint(
-                            fingerprint=fingerprint,
-                            facts=facts,
-                            group=group,
-                            processing=processing,
-                            extraction_schema_version="2.0",
-                        ).model_dump(mode="json"),
-                    },
-                )
-                await emit("extraction_progress", {"completed": index, "total": len(groups)})
             result = BatchResult(batch_id=job.id, files=list(files.values())).model_dump(
                 mode="json"
             )

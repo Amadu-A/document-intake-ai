@@ -97,6 +97,7 @@ class StatusView(StrictModel):
     work_stage: str | None
     document_processing: dict[str, DocumentProcessing]
     work_progress: dict[str, WorkProgress]
+    extraction_active: int = Field(0, ge=0, description="Активные документы этого пакета")
     created_at: datetime
     completed_at: datetime | None
     expires_at: datetime | None

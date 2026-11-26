@@ -83,7 +83,8 @@ async def test_vision_sends_images_alias_schema_and_unvalidated_stream(
     assert "authorization" not in captured[0].headers
     images = [p for p in payload["messages"][1]["content"] if p["type"] == "image_url"]
     assert images[0]["image_url"]["url"].startswith("data:image/png;base64,")
-    assert events[-1][1]["validated"] is False
+    deltas = [data for kind, data in events if kind == "text_delta"]
+    assert deltas and all(data["validated"] is False for data in deltas)
 
 
 @pytest.mark.parametrize("string_content", [False, True], ids=["object-json", "string-json"])

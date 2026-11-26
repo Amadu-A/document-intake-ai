@@ -58,7 +58,9 @@ async def test_real_browser_prompts_upload_sse_export_refresh(container, unused_
             await page.goto(base)
             organization = page.locator("[data-organization]")
             await expect(organization).to_have_value("")
-            await organization.fill("ООО «Браузерный тест»")
+            await expect(organization).to_be_hidden()
+            # Внутренний контекст/восстановление поддерживаются, пользовательский блок скрыт.
+            await organization.evaluate("node => node.value = 'ООО «Браузерный тест»'")
             await page.locator("[data-prompts-open]").click()
             editor = page.locator("[data-prompt-text]")
             await expect(page.locator("[data-prompts-dialog]")).to_be_visible()

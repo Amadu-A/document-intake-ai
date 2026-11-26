@@ -134,6 +134,7 @@ class Database(BoundaryTransactions):
         job.completed_at = now
         job.expires_at = now + timedelta(seconds=self.settings.retention_seconds)
         job.error = error
+        job.extraction_active = 0
         row.lease_until = None
         self._write(session, row, job, "terminal", {"status": status, "error": error})
 
@@ -394,6 +395,29 @@ class Database(BoundaryTransactions):
             row.lease_until = utcnow() + timedelta(seconds=self.settings.worker_lease_seconds)
             return True
 
+    async def begin_documents(
+        self, job_id: str, fence: int, documents: dict, retained: list[str]
+    ) -> None:
+        """Атомарно сохраняет стабильные ID/PDF и удаляет несовместимые следы старого запуска."""
+        async with self._transaction() as session:
+            row, job = await self._locked(session, job_id)
+            self._assert_worker(row, job, fence)
+            job.document_results = {k: v for k, v in job.document_results.items() if k in retained}
+            job.document_processing = {
+                identifier: job.document_results[str(item["group"]["document_index"])].processing
+                for identifier, item in documents.items()
+                if str(item["group"]["document_index"]) in job.document_results
+            }
+            job.manifest = {**job.manifest, "documents": documents}
+            job.extraction_active = 0
+            counter = WorkProgress(completed=len(job.document_results), total=len(documents))
+            job.work_progress["extraction"] = counter
+            job.stage = job.work_stage = "extraction_vlm"
+            job.progress = max(job.progress, 50 + 40 * counter.completed // max(1, counter.total))
+            self._write(
+                session, row, job, "extraction_progress", {**counter.model_dump(), "active": 0}
+            )
+
     async def checkpoint(self, job_id: str, fence: int, kind: str, data: dict) -> None:
         """Сохраняет этап/рендеры/событие; устаревшему worker запись запрещена."""
         async with self._transaction() as session:
@@ -405,12 +429,28 @@ class Database(BoundaryTransactions):
                 indexed[pair.index] = pair
                 job.comparisons = [indexed[i] for i in sorted(indexed)]
             elif kind == "stage":
-                job.stage, job.progress = data["stage"], data["progress"]
+                job.stage, job.progress = data["stage"], max(job.progress, data["progress"])
+                data = {**data, "progress": job.progress}
                 job.work_stage = data["stage"]
             elif kind in {"ocr_progress", "extraction_progress"}:
-                counter = WorkProgress.model_validate(data)
+                counter = WorkProgress.model_validate(
+                    {k: v for k, v in data.items() if k != "active"}
+                    if kind == "extraction_progress"
+                    else data
+                )
                 if counter.completed > counter.total:
                     raise ValueError("Число завершённых операций превышает общее число")
+                previous = job.work_progress.get(kind.removesuffix("_progress"))
+                if kind == "extraction_progress" and previous and previous.total == counter.total:
+                    counter.completed = max(previous.completed, counter.completed)
+                    data = {**data, "completed": counter.completed}
+                if kind == "extraction_progress":
+                    active = data.get("active", 0)
+                    if type(active) is not int or not 0 <= active <= min(
+                        counter.total, self.settings.document_extraction_concurrency
+                    ):
+                        raise ValueError("Некорректное число активных документов")
+                    job.extraction_active = active
                 job.work_progress[kind.removesuffix("_progress")] = counter
             elif kind == "document_processing":
                 job.document_processing[data["document_id"]] = DocumentProcessing.model_validate(
@@ -419,6 +459,9 @@ class Database(BoundaryTransactions):
             elif kind == "document_completed":
                 cached = DocumentCheckpoint.model_validate(data["checkpoint"])
                 job.document_results[str(cached.group.document_index)] = cached
+                counter = job.work_progress.get("extraction")
+                if counter:
+                    counter.completed = len(job.document_results)
                 job.document_processing[data["document_id"]] = cached.processing
                 job.manifest = {
                     **job.manifest,
@@ -613,6 +656,7 @@ class Database(BoundaryTransactions):
                         job.fence += 1
                         job.status = "uploaded" if job.work_kind == "prepare" else "queued"
                         job.stage = "queued"
+                        job.extraction_active = 0
                         row.lease_until = None
                         self._write(session, row, job, "retry", {"attempt": job.attempt})
                         if not await session.get(SignalRow, job.id):

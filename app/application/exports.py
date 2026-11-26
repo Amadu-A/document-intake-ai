@@ -227,7 +227,10 @@ class Exports:
                 if document_id in job.document_processing
                 else None,
             }
-            for document_id, item in job.manifest.get("documents", {}).items()
+            for document_id, item in sorted(
+                job.manifest.get("documents", {}).items(),
+                key=lambda pair: pair[1].get("group", {}).get("document_index", 0),
+            )
         ]
         return {
             "job_id": job.id,
@@ -235,6 +238,7 @@ class Exports:
             "stage": job.stage,
             "progress": job.progress,
             "work_stage": job.work_stage,
+            "extraction_active": job.extraction_active,
             "document_processing": {
                 identifier: processing.model_dump()
                 for identifier, processing in job.document_processing.items()

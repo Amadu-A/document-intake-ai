@@ -10,6 +10,7 @@ a { color: #2b65bd; text-decoration: none; }
 a:hover { text-decoration: underline; }
 :focus-visible { outline: 3px solid #6397ff; outline-offset: 3px; }
 [hidden] { display: none !important; }
+.internal-only { display: none !important; }
 h1, h2, h3, p { margin-top: 0; }
 h2 { font-size: 15px; margin-bottom: 0; }
 h3 { font-size: 13px; }

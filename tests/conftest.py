@@ -60,6 +60,9 @@ def settings(tmp_path):
         download_secret="d" * 48,
         api_keys={"onec": "e" * 48, "telegram": "f" * 48},
         model_attempts=2,
+        # Старые очереди scripted-ответов проверяют последовательный режим;
+        # параллельность отдельно проверяется context-aware HTTP стендом на реальном adapter.
+        document_extraction_concurrency=1,
         # Старые adapter fixtures проверяют sync-контракт; async имеет отдельные регрессии.
         docling_async=False,
         rate_limit_per_minute=1000,

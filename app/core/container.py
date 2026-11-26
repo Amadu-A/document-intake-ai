@@ -38,7 +38,12 @@ class Container:
         self.http = httpx.AsyncClient(
             trust_env=False,
             follow_redirects=False,
-            limits=httpx.Limits(max_connections=8, max_keepalive_connections=4),
+            limits=httpx.Limits(
+                max_connections=max(
+                    8, settings.vlm_request_concurrency + settings.docling_window_concurrency
+                ),
+                max_keepalive_connections=4,
+            ),
         )
         self.capabilities = Capabilities(settings)
         self.prompts = Prompts(self.database, Path(__file__).resolve().parents[2] / "prompts")

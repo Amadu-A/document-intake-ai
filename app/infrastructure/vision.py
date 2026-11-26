@@ -4,8 +4,10 @@
 import asyncio
 import base64
 import json
+import logging
 from io import BytesIO
 from pathlib import Path
+from time import perf_counter
 
 import httpx
 from PIL import Image
@@ -69,10 +71,54 @@ class SharedVision:
     def __init__(self, settings, client: httpx.AsyncClient) -> None:
         """Получает общий HTTP-клиент и ограниченные настройки из composition root."""
         self.settings, self.client = settings, client
+        self.slots = asyncio.Semaphore(settings.vlm_request_concurrency)
 
     @timed("shared_vlm_inference")
     async def request(
         self, prompt: str, context: dict, pages: list[dict], schema: dict, emit: Emit
+    ) -> dict:
+        """Ограничивает все виды VLM-запросов процесса, отдельно измеряет очередь и HTTP."""
+        queued_at, acquired = perf_counter(), False
+        metrics = {
+            "stage": "comparison"
+            if "left_page" in context and "right_page" in context
+            else {
+                "classify_document": "classification",
+                "compare_adjacent_pages": "comparison",
+                "extract_document": "extraction",
+                "read_primary_document_date": "refinement",
+                "read_related_court_dates": "refinement",
+                "reconcile_related_date_summary": "refinement",
+            }.get(context.get("task"), "other"),
+            "wait_ms": None,
+            "http_ms": None,
+            "prompt_tokens": None,
+            "completion_tokens": None,
+            "status": "cancelled",
+        }
+        try:
+            async with self.slots:
+                acquired = True
+                metrics["wait_ms"] = round((perf_counter() - queued_at) * 1000, 2)
+                result = await self._stream(prompt, context, pages, schema, emit, metrics)
+            metrics["status"] = "success"
+            await emit("vlm_timing", metrics.copy())
+            return result
+        except IntakeError as error:
+            metrics["status"] = error.code
+            if error.code != "lease_lost":
+                await emit("vlm_timing", metrics.copy())
+            raise
+        except Exception:
+            metrics["status"] = "error"
+            raise
+        finally:
+            if not acquired:
+                metrics["wait_ms"] = round((perf_counter() - queued_at) * 1000, 2)
+            logging.getLogger("intake").info(json.dumps({"event": "vlm_request_timing", **metrics}))
+
+    async def _stream(
+        self, prompt: str, context: dict, pages: list[dict], schema: dict, emit: Emit, metrics: dict
     ) -> dict:
         """Передаёт vision input и транслирует только явно неподтверждённые text_delta."""
         content = [{"type": "text", "text": json.dumps(context, ensure_ascii=False)}]
@@ -161,9 +207,11 @@ class SharedVision:
             "chat_template_kwargs": {"enable_thinking": self.settings.vlm_enable_thinking},
             "max_tokens": self.settings.vlm_max_tokens,
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
         chunks, pending, count, finished = [], "", 0, False
         whitespace = JSONWhitespaceGuard()
+        http_started = perf_counter()
         try:
             async with asyncio.timeout(self.settings.vlm_timeout_seconds):
                 async with self.client.stream(
@@ -187,6 +235,12 @@ class SharedVision:
                         if value == "[DONE]":
                             break
                         event = json.loads(value)
+                        usage = event.get("usage") or {}
+                        usage = usage if isinstance(usage, dict) else {}
+                        for key in ("prompt_tokens", "completion_tokens"):
+                            value = usage.get(key)
+                            if type(value) is int and 0 <= value <= 1_000_000_000:
+                                metrics[key] = value
                         for choice in event.get("choices", []):
                             reason = choice.get("finish_reason")
                             if reason and reason != "stop":
@@ -215,3 +269,5 @@ class SharedVision:
             ) from exc
         except (ValueError, KeyError, TypeError) as exc:
             raise IntakeError("model_invalid_json", "Некорректный поток JSON от VLM") from exc
+        finally:
+            metrics["http_ms"] = round((perf_counter() - http_started) * 1000, 2)

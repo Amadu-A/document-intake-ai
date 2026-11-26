@@ -78,7 +78,7 @@ checksum, byte length и запрет доступа после истечени
 `organization_hint` — необязательное полное название обслуживаемой организации,
 до 1000 символов, одинаково для `/jobs` и `/uploads`. Оно фиксируется при загрузке,
 возвращается в owner-protected status/snapshot и учитывается в идемпотентности.
-Web передаёт тот же параметр из необязательного поля перед выбором файлов.
+Поле организации в Web скрыто; API и восстановление ранее заданного контекста сохранены.
 Скрытой организации по умолчанию нет; reload восстанавливает контекст задания.
 
 `Idempotency-Key` — необязательный заголовок submit/upload длиной до 128 символов.
@@ -200,6 +200,14 @@ UI использует `include_pages=false` для status/snapshot/SSE; изо
 `work_progress.extraction`; неизвестный счётчик отсутствует. `work_stage` сохраняет
 последний выполнявшийся этап, в том числе при ошибке/отмене. Превью отдельно:
 `pages_ready`/`pages_total`. Общий legacy `progress` не является процентом OCR.
+Совместимое поле `extraction_active` в status/snapshot показывает число документов
+этого пакета внутри общего пула процесса. `work_progress.extraction.completed`
+считает уникальные готовые checkpoints, включая блоки с диагностикой; total — утверждённые
+регистрации. Завершение не по порядку не меняет segment_index. При восстановлении
+валидные результаты переиспользуются с прежними document_id. После завершения/отмены
+extraction_active=0. Схемы результатов JSON 1.0/2.0 и реестра не расширены.
+События `vlm_timing` содержат только stage, wait_ms локального semaphore, http_ms,
+status и известные prompt_tokens/completion_tokens. Нет usage — null, не оценка токенизатором.
 `pair_started` и `pair_result` (index, адреса соседей, status, attempts, solution,
 error_code, duration_seconds; без OCR/отпечатка). Порядок событий пар может отличаться
 от физического порядка; использовать index и PageRef.

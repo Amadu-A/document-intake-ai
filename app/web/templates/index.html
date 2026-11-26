@@ -8,9 +8,11 @@
     <label class="upload__label" for="files" data-dropzone><span class="upload__icon" aria-hidden="true">▤</span><span>Выберите файлы или перетащите сюда</span></label>
     <input class="upload__file" id="files" type="file" multiple data-files accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,.tif,.tiff">
     <p class="upload__hint">PDF, DOC, DOCX, TXT, JPG, PNG, TIFF · файл до {{ max_file_mb }} МиБ / {{ max_file_pages }} стр. · пакет до {{ max_files }} файлов / {{ max_mb }} МиБ / {{ max_pages }} стр.</p>
+    <div class="internal-only">
     <label class="upload__organization-label" for="organization">Организация (необязательно)</label>
     <input class="upload__organization" id="organization" name="organization_hint" type="text" maxlength="1000" autocomplete="organization" placeholder="Укажите организацию до загрузки файлов" aria-describedby="organization-help" data-organization>
     <p class="upload__hint" id="organization-help">Нужна для определения входящего/исходящего направления</p>
+    </div>
     <ul class="upload__queue" data-file-list></ul>
   </div>
   <fieldset class="mode">

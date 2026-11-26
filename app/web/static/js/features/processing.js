@@ -12,7 +12,6 @@ export function renderProcessing(data, { uploading = false, cancelling = false, 
   const success = status === "completed" || status === "completed_with_warnings";
   const mode = data?.mode || {}, counters = data?.work_progress || {};
   const documents = Object.values(data?.document_processing || {});
-  const currentDocument = documents.find(p => p.status === "processing");
   const active = stages[data?.work_stage || data?.stage];
   const review = status === "awaiting_confirmation";
   const manual = segmentation.segmentation_source?.startsWith("manual");
@@ -28,7 +27,6 @@ export function renderProcessing(data, { uploading = false, cancelling = false, 
   if (status === "running" && active === "ocr") { title = "Распознаём текст документов"; counter = counters.ocr; current = "ocr"; description = "OCR выполняется"; }
   if (status === "running" && active === "boundaries") { title = "Определяем границы документов"; counter = data.comparisons; current = "boundaries"; description = "Сравниваем соседние страницы"; }
   if (status === "running" && active === "extraction") { title = "Извлекаем реквизиты"; counter = counters.extraction; current = "extraction"; description = "Анализируем утверждённые документы"; }
-  if (status === "running" && active === "extraction" && currentDocument?.stage === "classification") title = "Определяем тип документа";
   if (review || ready && manual) { title = "Требуется ваша проверка"; description = `Предложено ${segmentation.document_count || 0} документов; ${data.comparisons?.errors || 0} границ требуют проверки`; current = "confirmation"; counter = null; }
   if (success) { title = "Обработка завершена"; description = "Результаты готовы"; current = "done"; counter = null; }
   if (success && documents.some(p => p.status !== "recognized")) {
@@ -50,6 +48,11 @@ export function renderProcessing(data, { uploading = false, cancelling = false, 
   else progress.removeAttribute("value");
   get("[data-processing-title]").textContent = title;
   get("[data-processing-description]").textContent = description;
+  const activity = get("[data-extraction-active]");
+  if (activity) {
+    activity.hidden = status !== "running" || active !== "extraction" || cancelling || unavailable || !!error;
+    activity.textContent = `Одновременно обрабатывается: ${data?.extraction_active || 0}`;
+  }
   const caption = uploading ? "Загружаем" : cancelling ? "Остановка задания" : status === "failed" || error ? "Ошибка" : status === "cancelled" ? "Отменено" : success ? "Результат готов" : waiting ? "Ожидает начала обработки" : review || ready && manual ? "Требуется подтверждение" : ready ? "Готово к анализу" : data && !data.preview_complete ? "Подготавливаем" : status === "running" ? ({ocr:"Распознаём",boundaries:"Проверяем границы",extraction:"Извлекаем"}[active] || "Обрабатываем") : statusNames[status] || "Анализ не запущен";
   get("[data-processing-status]").textContent = caption;
   get("[data-processing]").classList.toggle("processing--error", status === "failed" || !!error);

@@ -20,7 +20,7 @@ function Invoke-Checked {
     if ($commandExitCode -ne 0) { throw "Проверка завершилась с кодом $commandExitCode : $Command" }
 }
 Invoke-Checked 'uv' @('sync', '--frozen')
-if ($Browser) { Invoke-Checked 'uv' @('run', '--frozen', 'playwright', 'install', '--no-shell', 'chromium') }
+if ($Browser) { Invoke-Checked 'uv' @('run', '--frozen', 'playwright', 'install', 'chromium') }
 Invoke-Checked 'uv' @('run', '--frozen', 'ruff', 'check', '.')
 Invoke-Checked 'uv' @('run', '--frozen', 'ruff', 'format', '--check', '.')
 Invoke-Checked 'git' @('diff', '--check')
